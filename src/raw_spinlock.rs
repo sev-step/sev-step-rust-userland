@@ -9,9 +9,18 @@ global_asm!(include_str!("raw_spinlock.s"));
 
 extern "C" {
     /// Take the lock
-    pub fn lock(lock: &mut i32);
+    fn raw_spinlock_lock(lock: &mut i32);
     /// Release the lock
-    pub fn unlock(lock: &mut i32);
+    fn raw_spinlock_unlock(lock: &mut i32);
+}
+
+/// Take the lock
+pub unsafe fn lock(lock: &mut i32) {
+    raw_spinlock_lock(lock);
+}
+/// Release the lock
+pub unsafe fn unlock(lock: &mut i32) {
+    raw_spinlock_unlock(lock)
 }
 
 /// Initialize the lock

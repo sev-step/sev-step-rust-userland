@@ -4,4 +4,17 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
+use std::mem;
+
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+
+
+impl usp_event_type_t {
+    /// Returns the size of the matching event type in bytes
+    pub fn event_bytes(&self) -> usize {
+        match self {
+            usp_event_type_t::PAGE_FAULT_EVENT => mem::size_of::<usp_page_fault_event_t>(),
+            usp_event_type_t::SEV_STEP_EVENT => mem::size_of::<sev_step_event_t>(),
+        }
+    }
+}

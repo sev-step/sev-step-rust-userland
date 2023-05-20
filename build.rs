@@ -23,6 +23,9 @@ fn main() -> Result<()> {
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+        .rustified_enum("kvm_page_track_mode")
+        .rustified_enum("usp_event_type_t")
+        .rustified_enum("vmsa_register_name_t")
         // Finish the builder and generate the bindings.
         .generate()
         // Unwrap the Result and panic on failure.

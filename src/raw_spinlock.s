@@ -17,7 +17,7 @@ pause_once:
 # Acquires the given raw spinlock# if it is already acquired by another thread, this function blocks.
 # Parameters:
 #     - Pointer to spinlock value.
-.globl lock
+.globl raw_spinlock_lock
 raw_spinlock_lock:
 	
 	# Try to decrement spinlock value (atomic)
@@ -44,7 +44,7 @@ raw_spinlock_lock_success:
 # Releases the given raw spinlock.
 # Parameters:
 #     - Pointer to spinlock value.
-.globl unlock
+.globl raw_spinlock_unlock
 raw_spinlock_unlock:
 	
 	# Release spinlock by incrementing its value
