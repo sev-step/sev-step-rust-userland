@@ -19,15 +19,17 @@
 use crate::{
     ioctls, raw_spinlock,
     types::{
-        kvm_page_track_mode, sev_step_event_t, sev_step_partial_vmcb_save_area_t,
+        kvm_page_track_mode, sev_step_event_t, sev_step_param_t, sev_step_partial_vmcb_save_area_t,
         shared_mem_region_t, track_all_pages_t, track_page_param_t, usp_event_type_t,
         usp_init_poll_api_t, usp_page_fault_event_t, vmsa_register_name_t,
         SEV_STEP_SHARED_MEM_BYTES,
     },
 };
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use core::slice;
 use log::error;
+use nix::sys::ioctl;
+use std::sync::mpsc::Receiver;
 use std::{fs::File, os::fd::AsRawFd};
 use std::{mem, process};
 
@@ -42,6 +44,8 @@ pub struct SevStep<'a> {
     _raw_shared_mem: AlignedSevStepBuf,
     shared_mem_region: &'a mut shared_mem_region_t,
     kvm: File,
+    ///if we receive something on this channel, abort any blocking operations
+    abort: Receiver<()>,
 }
 
 impl<'a> Drop for SevStep<'a> {
@@ -58,7 +62,9 @@ impl<'a> Drop for SevStep<'a> {
 
 impl<'a> SevStep<'a> {
     ///Initiate the SevStep API. There may be only one instance open at a time.
-    pub fn new(decrypt_vmsa: bool) -> Result<Self> {
+    /// # Arguments
+    /// - `abort` : The SEV STEP API has some blocking functions. Sending a signal and the `abort` channel will abort these blocking functions with an error
+    pub fn new(decrypt_vmsa: bool, abort: Receiver<()>) -> Result<Self> {
         //alloc buffer
         let mut raw_shared_mem: AlignedSevStepBuf =
             AlignedSevStepBuf([0; SEV_STEP_SHARED_MEM_BYTES as usize]);
@@ -94,6 +100,7 @@ impl<'a> SevStep<'a> {
             _raw_shared_mem: raw_shared_mem,
             shared_mem_region,
             kvm,
+            abort,
         })
     }
 
@@ -158,6 +165,34 @@ impl<'a> SevStep<'a> {
         Ok(())
     }
 
+    pub fn start_stepping(
+        &self,
+        timer_value: u32,
+        target_gpa: &mut [u64],
+        flush_tlb: bool,
+    ) -> Result<()> {
+        let mut p = sev_step_param_t {
+            tmict_value: timer_value,
+            gpas_target_pages: target_gpa.as_mut_ptr(),
+            gpas_target_pages_len: target_gpa.len() as u64,
+            do_tlb_flush_before_each_step: flush_tlb,
+        };
+
+        unsafe {
+            ioctls::start_stepping(self.kvm.as_raw_fd(), &mut p)
+                .context("start stepping ioctl failed")?;
+        }
+
+        Ok(())
+    }
+
+    pub fn stop_stepping(&self) -> Result<()> {
+        unsafe {
+            ioctls::stop_stepping(self.kvm.as_raw_fd()).context("stop stepping ioctls failed")?;
+        }
+        Ok(())
+    }
+
     /// Check if there is a new event. The Result only indicates whether we were
     /// able to check for an event. The option inside the result indicates if there was an
     /// event
@@ -189,6 +224,27 @@ impl<'a> SevStep<'a> {
 
         unsafe { raw_spinlock::unlock(&mut self.shared_mem_region.spinlock) }
         return Ok(Some(result));
+    }
+
+    pub fn block_untill_event(&mut self) -> Result<Event> {
+        loop {
+            //check if we should abort
+            match self.abort.try_recv() {
+                Ok(()) => bail!("received abort signal"),
+                Err(std::sync::mpsc::TryRecvError::Empty) => (),
+                Err(e) => bail!("error checking abort channel : {}", e),
+            }
+
+            match self.poll_event() {
+                Ok(v) => match v {
+                    Some(e) => return Ok(e),
+                    None => continue,
+                },
+                Err(e) => {
+                    return Err(e.context("Poll event failed"));
+                }
+            }
+        }
     }
 
     /// Signal to the kernel space, that we are done with the latest event and that
