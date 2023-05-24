@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -18,8 +18,21 @@ pub fn single_step_victim_init(
         victim_program: program.to_string(),
     };
     let client = reqwest::blocking::Client::new();
-    let res: SingleStepVictimInitResp =
-        client.post("http://httpbin.org").json(&p).send()?.json()?;
+    let res: SingleStepVictimInitResp = client.post(url).json(&p).send()?.json()?;
 
     Ok(res)
+}
+
+pub fn single_step_victim_start(basepath: &str, program: SingleStepTarget) -> Result<()> {
+    let url = Url::parse(basepath)?;
+    let url = url.join("/single-step-victim/start")?;
+
+    let p = SingleStepVictimStartReq {
+        victim_program: program.to_string(),
+    };
+    let client = reqwest::blocking::Client::new();
+    let res = client.post(url).json(&p).send()?;
+    res.error_for_status()?;
+
+    Ok(())
 }

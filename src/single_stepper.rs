@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     api::{Event, PageFaultEvent, SevStep, SevStepEvent},
-    types::{kvm_page_track_mode, vmsa_register_name_t},
+    types::kvm_page_track_mode,
 };
 use anyhow::{bail, Context, Result};
 use log::{debug, info};
@@ -83,7 +83,7 @@ where
             if self.target_gpas.contains(&e.faulted_gpa) {
                 debug!("Entering victim pages. Disabling single stepping and tracking all but the target GPAs");
 
-                self.api.track_all_pages(self.track_mode);
+                self.api.track_all_pages(self.track_mode)?;
                 for x in &self.target_gpas {
                     self.api
                         .untrack_page(*x, self.track_mode)
@@ -133,11 +133,7 @@ where
                 self.state_machine.process(&e, &mut self.api)
             }
             x => {
-                bail!(
-                    "Multi Step of size {} after {} steps",
-                    e.retired_instructions,
-                    self.step_counter
-                );
+                bail!("Multi Step of size {} after {} steps", x, self.step_counter);
             }
         }
     }
@@ -159,14 +155,15 @@ where
                 Event::PageFaultEvent(v) => {
                     self.handle_pf_event(v)?;
                 }
-                Event::StepEvent(v) => (), /*Event::StepEvent(v) => match self.handle_step_event(v)? {
-                                               StateMachineNextAction::CONTINUE => {
-                                                   debug!("State says CONTINUE");
-                                               }
-                                               StateMachineNextAction::FINISHED => {
-                                                   debug!("State machine says FINISHED");
-                                               }
-                                           },*/
+                Event::StepEvent(v) => match self.handle_step_event(v)? {
+                    StateMachineNextAction::CONTINUE => {
+                        debug!("State says CONTINUE");
+                    }
+                    StateMachineNextAction::FINISHED => {
+                        debug!("State machine says FINISHED");
+                        break;
+                    }
+                },
             }
         }
         info!("Left main event loop");

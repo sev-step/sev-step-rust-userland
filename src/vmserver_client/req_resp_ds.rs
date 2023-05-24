@@ -16,7 +16,7 @@ pub struct PingPongPageTrackReq {
 
 #[derive(Serialize, Deserialize)]
 pub struct SingleStepVictimStartReq {
-    victim_program: String,
+    pub victim_program: String,
 }
 
 #[derive(Serialize, Deserialize)]
