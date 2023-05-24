@@ -228,23 +228,39 @@ impl<'a> SevStep<'a> {
 
     pub fn block_untill_event(&mut self) -> Result<Event> {
         loop {
-            //check if we should abort
             match self.abort.try_recv() {
                 Ok(()) => bail!("received abort signal"),
                 Err(std::sync::mpsc::TryRecvError::Empty) => (),
                 Err(e) => bail!("error checking abort channel : {}", e),
             }
-
-            match self.poll_event() {
-                Ok(v) => match v {
-                    Some(e) => return Ok(e),
-                    None => continue,
-                },
-                Err(e) => {
-                    return Err(e.context("Poll event failed"));
-                }
+            unsafe {
+                raw_spinlock::lock(&mut self.shared_mem_region.spinlock);
+            }
+            if 1 == self.shared_mem_region.have_event {
+                break;
+            }
+            unsafe {
+                raw_spinlock::unlock(&mut self.shared_mem_region.spinlock);
             }
         }
+
+        //if we are here, we hold the lock and there was and event
+        let result;
+        match self.shared_mem_region.event_type {
+            usp_event_type_t::PAGE_FAULT_EVENT => {
+                let e: *const usp_page_fault_event_t =
+                    self.shared_mem_region.event_buffer.as_ptr() as *const usp_page_fault_event_t;
+                result = Event::PageFaultEvent(PageFaultEvent::from_c_struct(e));
+            }
+            usp_event_type_t::SEV_STEP_EVENT => {
+                result = Event::StepEvent(SevStepEvent::from_raw_event_buffer(
+                    &self.shared_mem_region.event_buffer,
+                ));
+            }
+        }
+
+        unsafe { raw_spinlock::unlock(&mut self.shared_mem_region.spinlock) }
+        return Ok(result);
     }
 
     /// Signal to the kernel space, that we are done with the latest event and that

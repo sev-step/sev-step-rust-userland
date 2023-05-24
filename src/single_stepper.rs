@@ -7,7 +7,7 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use log::{debug, info};
 
-enum StateMachineNextAction {
+pub enum StateMachineNextAction {
     CONTINUE,
     FINISHED,
 }
@@ -17,51 +17,6 @@ pub trait SteppingStateMachine {
         event: &SevStepEvent,
         api: &mut SevStep,
     ) -> Result<StateMachineNextAction>;
-}
-
-pub trait Middleware {
-    fn process(&mut self, event :Event,api :&mut SevStep) -> Result<Box< dyn Middleware> >;
-}
-
-pub trait Finisher {
-    fn build (&mut self, event: Event, api &mut SevStep) -> Result<StateMachineNextAction>;
-}
-
-/*
-pub struct CheckVaddrsStateMachine {
-    expected_vaddrs: Vec<u64>,
-    next_vaddr: Box<dyn Iterator<Item = u64>>,
-}
-
-impl CheckVaddrsStateMachine {
-    pub fn new(expected_vaddrs: Vec<u64>) -> CheckVaddrsStateMachine {
-        CheckVaddrsStateMachine {
-            expected_vaddrs,
-            next_vaddr: Box::new(expected_vaddrs.iter()),
-        }
-    }
-}*/
-
-impl SteppingStateMachine for CheckVaddrsStateMachine {
-    fn process(
-        &mut self,
-        event: &SevStepEvent,
-        api: &mut SevStep,
-    ) -> Result<StateMachineNextAction> {
-        let rip = event
-            .get_register(vmsa_register_name_t::VRN_RIP)
-            .context("Failed to get RIP")?;
-
-        match self.next_vaddr.next() {
-            None => return Ok(StateMachineNextAction::FINISHED),
-            Some(expected) => {
-                if expected != rip {
-                    bail!("Expected vaddr 0x{:x} got 0x{:x}", expected, rip);
-                }
-            }
-        }
-        Ok(StateMachineNextAction::CONTINUE)
-    }
 }
 
 pub struct TargetedStepper<'a, T>
@@ -104,7 +59,7 @@ where
         }
     }
 
-    fn handle_pf_event(&self, e: PageFaultEvent) -> Result<()> {
+    fn handle_pf_event(&mut self, e: PageFaultEvent) -> Result<()> {
         if self.on_victim_pages {
             if self.target_gpas.contains(&e.faulted_gpa) {
                 bail!("Internal state assumed to be on victim pages but got page fault for victim page. This should never happen");
@@ -115,9 +70,9 @@ where
 
                 self.api.untrack_all_pages(self.track_mode)?;
 
-                for x in self.target_gpas {
+                for x in &self.target_gpas {
                     self.api
-                        .track_page(x, self.track_mode)
+                        .track_page(*x, self.track_mode)
                         .with_context(|| format!("Failed to re-track target GPA 0x{:x}", x))?;
                 }
 
@@ -129,13 +84,13 @@ where
                 debug!("Entering victim pages. Disabling single stepping and tracking all but the target GPAs");
 
                 self.api.track_all_pages(self.track_mode);
-                for x in self.target_gpas {
+                for x in &self.target_gpas {
                     self.api
-                        .untrack_page(x, self.track_mode)
+                        .untrack_page(*x, self.track_mode)
                         .with_context(|| format!("Failed to un-track GPA 0x:{:x}", x))?;
                 }
 
-                let gpas = self
+                let mut gpas = self
                     .target_gpas
                     .iter()
                     .map(|x| x.clone())
@@ -194,7 +149,6 @@ where
 
         info!("entering main event loop");
 
-        let mut on_victim_pages = false;
         loop {
             let event = self
                 .api
@@ -205,15 +159,14 @@ where
                 Event::PageFaultEvent(v) => {
                     self.handle_pf_event(v)?;
                 }
-                Event::StepEvent(v) => match self.handle_step_event(v)? {
-                    StateMachineNextAction::CONTINUE => {
-                        debug!("State says CONTINUE");
-                    }
-                    StateMachineNextAction::FINISHED => {
-                        debug!("State machine says FINISHED");
-                        break;
-                    }
-                },
+                Event::StepEvent(v) => (), /*Event::StepEvent(v) => match self.handle_step_event(v)? {
+                                               StateMachineNextAction::CONTINUE => {
+                                                   debug!("State says CONTINUE");
+                                               }
+                                               StateMachineNextAction::FINISHED => {
+                                                   debug!("State machine says FINISHED");
+                                               }
+                                           },*/
             }
         }
         info!("Left main event loop");

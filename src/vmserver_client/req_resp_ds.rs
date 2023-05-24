@@ -21,7 +21,7 @@ pub struct SingleStepVictimStartReq {
 
 #[derive(Serialize, Deserialize)]
 pub struct SingleStepVictimInitReq {
-    victim_program: String,
+    pub victim_program: String,
 }
 
 #[derive(Serialize, Deserialize)]
