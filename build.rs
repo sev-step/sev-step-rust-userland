@@ -2,15 +2,33 @@ extern crate bindgen;
 
 use anyhow::{Context, Result};
 use std::env::{self};
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 fn main() -> Result<()> {
     // Tell cargo to invalidate the built crate whenever the wrapper changes
-    println!("cargo:rerun-if-changed=wrapper.h");
+    println!("cargo:rerun-if-changed=environment.sh");
 
     const ENV_KERNEL_HEADERS: &'static str = "KERNEL_HEADERS";
     let header_path = env::var(ENV_KERNEL_HEADERS)
         .with_context(|| format!("Failed to get {} env var", ENV_KERNEL_HEADERS))?;
+
+    /*for the following build process we need a wrapper.h
+    file with includes to all c headers. We generate this filed
+    based on the paths/configs provided in the ENV vars
+     */
+    let mut wrapper_h_file =
+        File::create("wrapper.h").context("failed to create warapper.h file")?;
+    write!(
+        wrapper_h_file,
+        r#"#include "{}""#,
+        Path::new(&header_path)
+            .join("linux/sev-step/sev-step.h")
+            .to_str()
+            .expect("failed to build path to sev-step.h header")
+    )
+    .context("failed to add sev-step.h path to wrapper.h")?;
 
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
