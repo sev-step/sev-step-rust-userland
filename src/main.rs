@@ -1,13 +1,16 @@
 use std::sync::mpsc::channel;
 
-use anyhow::{Ok, Result};
+use anyhow::{Context, Ok, Result};
 use log::debug;
+
+
 use rust_userland::api::SevStep;
 use rust_userland::single_stepper::{
     BuildStepHistogram, EventHandler, SkipIfNotOnTargetGPAs, StopAfterNStepsHandler,
     TargetedStepper,
 };
 use rust_userland::types::kvm_page_track_mode;
+use rust_userland::vm_setup_helpers;
 use rust_userland::vmserver_client::{self, SingleStepTarget};
 
 fn main() -> Result<()> {
@@ -18,6 +21,19 @@ fn main() -> Result<()> {
     ctrlc::set_handler(move || tx.send(()).expect("Could not send signal on channel."))
         .expect("Error setting Ctrl-C handler");
 
+    let core_id = 9;
+    let vcpu_thread_id = vm_setup_helpers::get_vcpu_thread_id("localhost:4444")
+        .context("failed to get VCPU thread id")?;
+    debug!("vcpu_thread_id is {}", vcpu_thread_id);
+
+    vm_setup_helpers::pin_pid_to_cpu(vcpu_thread_id, core_id).context(format!(
+        "failed to pin vcpu (tid {}) to core {}",
+        vcpu_thread_id, core_id,
+    ))?;
+    debug!(
+        "Pinned vcpu_thread (tid {}) to core {}",
+        vcpu_thread_id, core_id
+    );
     let mut _sev_step = SevStep::new(false, rx)?;
 
     let basepath = "http://localhost:8080";
