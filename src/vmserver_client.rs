@@ -1,11 +1,13 @@
-use anyhow::{bail, Result};
-use reqwest::blocking::Client;
+use anyhow::{Result};
+
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
+
 
 use self::req_resp_ds::*;
 
 mod req_resp_ds;
+
+pub use req_resp_ds::{SingleStepTarget, SingleStepVictimInitResp};
 
 pub fn single_step_victim_init(
     basepath: &str,

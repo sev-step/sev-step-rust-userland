@@ -23,9 +23,9 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use core::slice;
 use log::error;
-use std::sync::mpsc::Receiver;
 use std::{fs::File, os::fd::AsRawFd};
 use std::{mem, process};
+use std::{sync::mpsc::Receiver, thread};
 
 #[repr(C, align(4096))]
 ///Page aligned array of size `SEV_STEP_SHARED_MEM_BYTES`. This is only
@@ -43,9 +43,12 @@ pub struct SevStep<'a> {
 }
 
 impl<'a> Drop for SevStep<'a> {
-    ///Free internal resources an close connection with kernel counterpart. This may fail however,
+    ///Free internal resources and close connection with kernel counterpart. This may fail however,
     /// errors are only logged.
     fn drop(&mut self) {
+        if let Err(e) = self.stop_stepping() {
+            error!("Failed to stop stepping: {}", e)
+        }
         unsafe {
             if let Err(e) = ioctls::close_api(self.kvm.as_raw_fd()) {
                 error!("Error closing API: {}", e);
@@ -220,7 +223,17 @@ impl<'a> SevStep<'a> {
         return Ok(Some(result));
     }
 
-    pub fn block_untill_event(&mut self) -> Result<Event> {
+    pub fn block_untill_event<F>(&mut self, target_trigger: F) -> Result<Event>
+    where
+        F: FnOnce() -> Result<()>,
+        F: Send + 'static,
+    {
+        thread::spawn(move || {
+            if let Err(e) = target_trigger() {
+                error!("Target trigger failed with {}", e);
+            }
+        });
+
         loop {
             match self.abort.try_recv() {
                 Ok(()) => bail!("received abort signal"),

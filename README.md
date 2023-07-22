@@ -13,6 +13,5 @@ Rust-based user space library for SEV-Step
 
 ## Dev Notes
 
-You need the `refactorUserspaceHeader` kernel branch. Rebuilding the kernel module does
-not seem enough after switching branches. I guess we need to re-generate the headers.
-Not sure if there is an extra target for that. Building the full kernel fixes this in any case.
+You need the `refactorUserspaceHeader` kernel branch. Make sure to run `make headers` to refresh the
+header files (especially after coming from another branch)

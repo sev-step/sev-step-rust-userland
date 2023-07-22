@@ -27,23 +27,23 @@ pub struct SingleStepVictimInitReq {
 #[derive(Serialize, Deserialize)]
 pub struct SingleStepVictimInitResp {
     /// (Guest) physical address at which the targeted function is mapped
-    gpa: u64,
+    pub gpa: u64,
     /// virtual address at which the targeted function is mapped
-    vaddr: u64,
+    pub vaddr: u64,
     /// all instr offsets of the targeted function (on assembly level), relative to vaddr
-    expected_offsets: Vec<u64>,
+    pub expected_offsets: Vec<u64>,
 
     /// If true, the following cache attack fields contain valid data
-    has_cache_attack_data: bool,
+    pub has_cache_attack_data: bool,
     // Start of cache attack fields
     /// subset of expected_offsets at which relevant memory accesses take place
-    offsets_with_mem_access: Vec<u64>,
+    pub offsets_with_mem_access: Vec<u64>,
     /// store for each offsets_with_mem_access which offset in the lookup table is accessed
-    mem_access_target_offset: Vec<u64>,
-    lookup_table_gpa: u64,
-    lookup_table_vaddr: u64,
+    pub mem_access_target_offset: Vec<u64>,
+    pub lookup_table_gpa: u64,
+    pub lookup_table_vaddr: u64,
     /// length of lookup table in bytes
-    lookup_table_bytes: u64,
+    pub lookup_table_bytes: u64,
     //end of cache attack fields
 }
 
