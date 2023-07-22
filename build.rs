@@ -1,6 +1,7 @@
 extern crate bindgen;
 
 use anyhow::{Context, Result};
+use dotenv;
 use std::env::{self};
 use std::fs::File;
 use std::io::Write;
@@ -11,6 +12,11 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=environment.sh");
 
     const ENV_KERNEL_HEADERS: &'static str = "KERNEL_HEADERS";
+
+    /*besides making usage more convenient, this is also crucial for the rust language
+    server to pick up the env var, allowing more in-depth analysis*/
+    dotenv::from_path("./environment.sh").context("failed to load env file")?;
+
     let header_path = env::var(ENV_KERNEL_HEADERS)
         .with_context(|| format!("Failed to get {} env var", ENV_KERNEL_HEADERS))?;
 
