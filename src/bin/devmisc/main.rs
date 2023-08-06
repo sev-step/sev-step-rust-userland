@@ -1,8 +1,7 @@
-use std::sync::mpsc::channel;
+use crossbeam::channel;
 
 use anyhow::{Context, Ok, Result};
 use log::debug;
-
 
 use rust_userland::api::SevStep;
 use rust_userland::single_stepper::{
@@ -16,11 +15,12 @@ use rust_userland::vmserver_client::{self, SingleStepTarget};
 fn main() -> Result<()> {
     env_logger::init();
     debug!("main running with debug logging!");
-    let (tx, rx) = channel();
+    let (tx, rx) = channel::bounded(1);
 
     ctrlc::set_handler(move || tx.send(()).expect("Could not send signal on channel."))
         .expect("Error setting Ctrl-C handler");
 
+    //TODO: move this code in api ctx creation
     let core_id = 9;
     let vcpu_thread_id = vm_setup_helpers::get_vcpu_thread_id("localhost:4444")
         .context("failed to get VCPU thread id")?;
@@ -34,6 +34,11 @@ fn main() -> Result<()> {
         "Pinned vcpu_thread (tid {}) to core {}",
         vcpu_thread_id, core_id
     );
+
+    //TODO: cpufreq pinning
+
+    //TODO: make vpcu pinning and cpufreq pinning configurable
+
     let mut _sev_step = SevStep::new(false, rx)?;
 
     let basepath = "http://localhost:8080";

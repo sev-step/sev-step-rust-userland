@@ -7,7 +7,7 @@ use qapi::{qmp, Qmp};
 /// - qmp_addr address where QEMU's qmp monitor listens. Format IP:Port
 pub fn get_vcpu_thread_id(qmp_addr: &str) -> Result<i64> {
     let stream =
-        std::net::TcpStream::connect(qmp_addr).context("failed to connect to qmp monitor")?;
+        std::net::TcpStream::connect(qmp_addr).context(format!("failed to connect to qmp monitor on {}", qmp_addr))?;
 
     let mut qmp = Qmp::from_stream(&stream);
 

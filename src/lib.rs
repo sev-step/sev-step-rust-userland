@@ -1,4 +1,5 @@
 pub mod api;
+pub mod config;
 mod ioctls;
 mod raw_spinlock;
 pub mod single_stepper;

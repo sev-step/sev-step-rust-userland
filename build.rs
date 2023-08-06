@@ -1,7 +1,7 @@
 extern crate bindgen;
 
 use anyhow::{Context, Result};
-use dotenv;
+
 use std::env::{self};
 use std::fs::File;
 use std::io::Write;

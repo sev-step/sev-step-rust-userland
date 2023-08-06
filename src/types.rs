@@ -8,7 +8,6 @@ use std::mem;
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-
 impl usp_event_type_t {
     /// Returns the size of the matching event type in bytes
     pub fn event_bytes(&self) -> usize {

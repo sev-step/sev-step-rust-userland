@@ -1,17 +1,65 @@
 use std::str::FromStr;
 
 use anyhow::bail;
+
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize)]
+use crate::types::kvm_page_track_mode;
+
+#[derive(Deserialize, Serialize, Debug)]
 pub struct PingPongPageTrackInitResp {
-    gpa1: u64,
-    gpa2: u64,
+    pub gpa1: u64,
+    pub gpa2: u64,
+    pub iterations: u64,
+}
+
+///Selects which kind of access a PingPongerJob should perform to its two pages
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub enum AccessType {
+    READ,
+    WRITE,
+    EXEC,
+}
+
+impl ToString for AccessType {
+    fn to_string(&self) -> String {
+        match self {
+            AccessType::READ => String::from("READ"),
+            AccessType::WRITE => String::from("WRITE"),
+            AccessType::EXEC => String::from("EXEC"),
+        }
+    }
+}
+
+impl FromStr for AccessType {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "READ" => Ok(AccessType::READ),
+            "WRITE" => Ok(AccessType::WRITE),
+            "EXEC" => Ok(AccessType::EXEC),
+            _ => bail!("not a valid access type"),
+        }
+    }
+}
+
+impl TryFrom<kvm_page_track_mode> for AccessType {
+    type Error = anyhow::Error;
+
+    fn try_from(value: kvm_page_track_mode) -> Result<Self, Self::Error> {
+        match value {
+            kvm_page_track_mode::KVM_PAGE_TRACK_WRITE => Ok(AccessType::WRITE),
+            kvm_page_track_mode::KVM_PAGE_TRACK_ACCESS => Ok(AccessType::READ),
+            kvm_page_track_mode::KVM_PAGE_TRACK_EXEC => Ok(AccessType::EXEC),
+            _ => bail!("cannot be converted to AccessType"),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct PingPongPageTrackReq {
-    access_type: String,
+    pub access_type: AccessType,
 }
 
 #[derive(Serialize, Deserialize)]

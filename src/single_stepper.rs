@@ -23,6 +23,73 @@ pub trait EventHandler {
     fn get_name(&self) -> &str;
 }
 
+/// Tracks a set of GPAs with the given track mode.
+/// All GPAs are automatically re-tracked upon subsequent page fault events
+/// Does NOT break track loops where no progress is made inside VM
+/// Assumes pages are initially tracked
+pub struct RetrackGPASet {
+    gpas: HashSet<u64>,
+    name: String,
+    track_mode: kvm_page_track_mode,
+    gpa_for_retrack: Option<u64>,
+    iteration_count: usize,
+    max_iterations: Option<usize>,
+}
+
+impl RetrackGPASet {
+    /// Constructs a new RetrackGPASet
+    /// # Arguments
+    /// * `gpas` gpas that should be tracked
+    /// * `track_mode` selects the used tracking mode
+    /// * `max_iterations` if set, terminate this handler after the given iteration count by returning [`StateMachineNextAction::SHUTDOWN`] in [`Self::process()`]
+    pub fn new(
+        gpas: HashSet<u64>,
+        track_mode: kvm_page_track_mode,
+        max_iterations: Option<usize>,
+    ) -> Self {
+        RetrackGPASet {
+            gpas,
+            track_mode,
+            name: "RetrackGPASet".to_string(),
+            gpa_for_retrack: None,
+            iteration_count: 0,
+            max_iterations,
+        }
+    }
+}
+
+impl EventHandler for RetrackGPASet {
+    fn process(&mut self, event: &Event, api: &mut SevStep) -> Result<StateMachineNextAction> {
+        match &event {
+            Event::PageFaultEvent(pf_event) => {
+                if let Some(gpa) = self.gpa_for_retrack {
+                    if gpa == pf_event.faulted_gpa {
+                        bail!("got second fault for gpa 0x{:x}", gpa);
+                    }
+                    api.track_page(gpa, self.track_mode)
+                        .context(format!("failed to re-track gpa 0x{:x}", gpa))?;
+                    self.gpa_for_retrack = None;
+                }
+                if self.gpas.contains(&pf_event.faulted_gpa) {
+                    self.gpa_for_retrack = Some(pf_event.faulted_gpa);
+                }
+                self.iteration_count += 1;
+                if let Some(max_iterations) = self.max_iterations {
+                    if self.iteration_count >= max_iterations {
+                        return Ok(StateMachineNextAction::SHUTDOWN);
+                    }
+                }
+                Ok(StateMachineNextAction::NEXT)
+            }
+            Event::StepEvent(_) => Ok(StateMachineNextAction::NEXT),
+        }
+    }
+
+    fn get_name(&self) -> &str {
+        &self.name
+    }
+}
+
 pub struct SkipIfNotOnTargetGPAs {
     on_victim_pages: bool,
     target_gpas: HashSet<u64>,
@@ -82,11 +149,7 @@ impl EventHandler for SkipIfNotOnTargetGPAs {
                         .with_context(|| format!("Failed to un-track GPA 0x:{:x}", x))?;
                 }
 
-                let mut gpas = self
-                    .target_gpas
-                    .iter()
-                    .map(|x| x.clone())
-                    .collect::<Vec<u64>>();
+                let mut gpas = self.target_gpas.iter().copied().collect::<Vec<u64>>();
                 api.start_stepping(self.timer_value, &mut gpas, true)?;
 
                 self.on_victim_pages = true;
@@ -188,7 +251,7 @@ impl EventHandler for StopAfterNStepsHandler {
             return Ok(StateMachineNextAction::SHUTDOWN);
         }
 
-        return Ok(StateMachineNextAction::NEXT);
+        Ok(StateMachineNextAction::NEXT)
     }
 
     fn get_name(&self) -> &str {
@@ -246,6 +309,7 @@ where
             .block_untill_event(self.target_trigger)
             .context("error waiting for initial event")?;
         loop {
+            debug!("Got Event {:?}", event);
             for handler in &mut self.handler_chain {
                 debug!("Running handler {}", handler.get_name());
                 match handler.process(&event, &mut self.api)? {
