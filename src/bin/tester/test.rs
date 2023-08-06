@@ -1,7 +1,7 @@
 use std::{collections::HashSet, fmt::Display, str::FromStr};
 
 use crate::SevStep;
-use anyhow::{Context, Result};
+use clap::ValueEnum;
 use crossbeam::channel::Receiver;
 use log::debug;
 use rust_userland::{
@@ -16,7 +16,8 @@ pub trait Test {
     fn run(&self) -> Result<()>;
 }
 
-#[derive(Debug, Clone, Copy)]
+///This enum describes all known tests
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum TestName {
     SetupTeardown,
     PageTrackPresent,
@@ -61,7 +62,8 @@ impl Display for TestName {
         }
     }
 }
-#[derive(Debug, Clone, Copy)]
+///Group similar tests together to easily test whole subsystems
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum TestGroup {
     All,
     Basic,
