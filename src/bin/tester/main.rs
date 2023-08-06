@@ -23,18 +23,15 @@ struct CliArgs {
 }
 
 fn main() -> Result<()> {
-    let args = CliArgs::parse();
+    env_logger::init();
 
+    //parse args
+    let args = CliArgs::parse();
     let vm_config =
         config::parse_config(&args.vm_config_path).context("failed to parse vm config")?;
 
-    env_logger::init();
+    //cpu pinning for VM and ourself
     debug!("main running with debug logging!");
-    let (tx, rx) = bounded(1);
-
-    ctrlc::set_handler(move || tx.send(()).expect("Could not send signal on channel."))
-        .expect("Error setting Ctrl-C handler");
-
     let vcpu_thread_id = vm_setup_helpers::get_vcpu_thread_id(&vm_config.qemu_qmp_address)
         .context("failed to get VCPU thread id")?;
     debug!("vcpu_thread_id is {}", vcpu_thread_id);
@@ -48,6 +45,7 @@ fn main() -> Result<()> {
         vcpu_thread_id, vm_config.vm_cpu_core
     );
 
+    //instantiate tests
     let mut selected_tests = Vec::new();
     if let Some(v) = args.test_group {
         selected_tests.append(&mut v.into())
@@ -59,11 +57,22 @@ fn main() -> Result<()> {
         panic!("Error in CLI parsing logic")
     }
     debug!("selected_tests: {:?}", selected_tests);
+
+    //mapping ctrl-c to channel
+    let (tx, rx) = bounded(1);
+    ctrlc::set_handler(move || tx.send(()).expect("Could not send signal on channel."))
+        .expect("Error setting Ctrl-C handler");
+
     let tests: Vec<Box<dyn Test>> = selected_tests
         .iter()
         .map(|t| t.instantiate(rx.clone(), vm_config.vm_server_address.clone()))
-        .collect();
+        .collect::<Result<_>>()
+        .context(format!(
+            "failed to instantiate at least one of the selected tests {:?}",
+            selected_tests
+        ))?;
 
+    //runs tests
     for t in tests.into_iter() {
         println!("Running test {}", t.get_name());
         t.run().context(format!("Test {} failed", t.get_name()))?;

@@ -1,6 +1,7 @@
 use std::{collections::HashSet, fmt::Display, str::FromStr};
 
 use crate::SevStep;
+use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
 use crossbeam::channel::Receiver;
 use log::debug;
@@ -40,14 +41,28 @@ impl FromStr for TestName {
 }
 
 impl TestName {
-    pub fn instantiate(&self, abort_chan: Receiver<()>, server_addr: String) -> Box<dyn Test> {
+    pub fn instantiate(
+        &self,
+        abort_chan: Receiver<()>,
+        server_addr: String,
+    ) -> Result<Box<dyn Test>> {
         match &self {
-            TestName::SetupTeardown => Box::new(SetupTeardownTest::new(abort_chan)),
-            TestName::PageTrackPresent => {
-                Box::new(PageTrackPresentTest::new(abort_chan, server_addr))
-            }
-            TestName::PageTrackWrite => todo!(),
-            TestName::PageTrackExec => todo!(),
+            TestName::SetupTeardown => Ok(Box::new(SetupTeardownTest::new(abort_chan))),
+            TestName::PageTrackPresent => Ok(Box::new(CommonPageTrackTest::new(
+                abort_chan,
+                kvm_page_track_mode::KVM_PAGE_TRACK_ACCESS,
+                server_addr,
+            )?)),
+            TestName::PageTrackWrite => Ok(Box::new(CommonPageTrackTest::new(
+                abort_chan,
+                kvm_page_track_mode::KVM_PAGE_TRACK_WRITE,
+                server_addr,
+            )?)),
+            TestName::PageTrackExec => Ok(Box::new(CommonPageTrackTest::new(
+                abort_chan,
+                kvm_page_track_mode::KVM_PAGE_TRACK_EXEC,
+                server_addr,
+            )?)),
         }
     }
 }
@@ -62,21 +77,35 @@ impl Display for TestName {
         }
     }
 }
+
 ///Group similar tests together to easily test whole subsystems
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum TestGroup {
+    ///This group contains tests
     All,
+    ///This group contains test related to testing the kernel space to user space channel
     Basic,
+    ///This group contains all page fault tracking related tests
     PageFault,
+    ///This group contains all single stepping related tests
     SingleStepping,
 }
 
 impl Into<Vec<TestName>> for TestGroup {
     fn into(self) -> Vec<TestName> {
         match self {
-            TestGroup::All => vec![TestName::SetupTeardown],
+            TestGroup::All => vec![
+                TestName::SetupTeardown,
+                TestName::PageTrackWrite,
+                TestName::PageTrackPresent,
+                TestName::PageTrackExec,
+            ],
             TestGroup::Basic => vec![TestName::SetupTeardown],
-            TestGroup::PageFault => vec![],
+            TestGroup::PageFault => vec![
+                TestName::PageTrackWrite,
+                TestName::PageTrackPresent,
+                TestName::PageTrackExec,
+            ],
             TestGroup::SingleStepping => vec![],
         }
     }
@@ -109,7 +138,6 @@ impl Display for TestGroup {
 
 pub struct SetupTeardownTest {
     name: TestName,
-    group: TestGroup,
     description: String,
     abort_chan: Receiver<()>,
 }
@@ -118,7 +146,6 @@ impl SetupTeardownTest {
     pub fn new(abort_chan: Receiver<()>) -> Self {
         SetupTeardownTest {
             name: TestName::SetupTeardown,
-            group: TestGroup::Basic,
             description: "Repeatedly opens and closes an API connection".to_string(),
             abort_chan,
         }
@@ -149,15 +176,44 @@ pub struct CommonPageTrackTest {
     abort_chan: Receiver<()>,
     /// address at which the server inside vm is reachable. format: http://hostname:port
     server_addr: String,
+    name: TestName,
+    description: String,
 }
 
 impl CommonPageTrackTest {
-    fn new(abort_chan: Receiver<()>, track_type: kvm_page_track_mode, server_addr: String) -> Self {
-        CommonPageTrackTest {
+    fn new(
+        abort_chan: Receiver<()>,
+        track_type: kvm_page_track_mode,
+        server_addr: String,
+    ) -> Result<Self> {
+        let name = match track_type {
+            kvm_page_track_mode::KVM_PAGE_TRACK_WRITE => TestName::PageTrackWrite,
+            kvm_page_track_mode::KVM_PAGE_TRACK_ACCESS => TestName::PageTrackPresent,
+            kvm_page_track_mode::KVM_PAGE_TRACK_EXEC => TestName::PageTrackExec,
+            _ => bail!(format!(
+                "CommonPageTrackTest does not support track mode {:?}",
+                track_type
+            )),
+        };
+        Ok(CommonPageTrackTest {
             track_type,
             abort_chan,
             server_addr,
-        }
+            name,
+            description:
+                "Track read access to two pages that are accessed in an alternating manner"
+                    .to_string(),
+        })
+    }
+}
+
+impl Test for CommonPageTrackTest {
+    fn get_name(&self) -> String {
+        self.name.to_string()
+    }
+
+    fn get_description(&self) -> &str {
+        &self.description
     }
 
     fn run(&self) -> Result<()> {
@@ -207,43 +263,5 @@ impl CommonPageTrackTest {
         }
 
         Ok(())
-    }
-}
-
-pub struct PageTrackPresentTest {
-    name: TestName,
-    group: TestGroup,
-    description: String,
-    test: CommonPageTrackTest,
-}
-
-impl PageTrackPresentTest {
-    pub fn new(abort_chan: Receiver<()>, server_addr: String) -> Self {
-        PageTrackPresentTest {
-            name: TestName::PageTrackPresent,
-            group: TestGroup::PageFault,
-            description:
-                "Track read access to two pages that are accessed in an alternating manner"
-                    .to_string(),
-            test: CommonPageTrackTest::new(
-                abort_chan,
-                kvm_page_track_mode::KVM_PAGE_TRACK_ACCESS,
-                server_addr,
-            ),
-        }
-    }
-}
-
-impl Test for PageTrackPresentTest {
-    fn get_name(&self) -> String {
-        self.name.to_string()
-    }
-
-    fn get_description(&self) -> &str {
-        &self.description
-    }
-
-    fn run(&self) -> Result<()> {
-        self.test.run()
     }
 }
