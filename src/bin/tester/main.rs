@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use colored::Colorize;
 use crossbeam::channel::bounded;
 use log::debug;
 use rust_userland::{api::SevStep, config, vm_setup_helpers};
@@ -73,10 +74,35 @@ fn main() -> Result<()> {
         ))?;
 
     //runs tests
-    for t in tests.into_iter() {
-        println!("Running test {}", t.get_name());
-        t.run().context(format!("Test {} failed", t.get_name()))?;
-        println!("SUCCESS");
+    let mut successful_tests = 0;
+    let test_count = tests.len();
+    for (idx, t) in tests.into_iter().enumerate() {
+        println!(
+            "Running test [{}/{}]: {}",
+            idx + 1,
+            test_count,
+            t.get_name()
+        );
+        match t
+            .run()
+            .context(format!("Test {} {}", t.get_name(), "failed".red()))
+        {
+            Ok(_) => {
+                successful_tests += 1;
+                println!("{}", "SUCCESS".green());
+            }
+            Err(e) => println!("{} with {}", "FAILED".red(), e),
+        }
+    }
+    if successful_tests == test_count {
+        println!("{}", "All tests succeeded".green());
+    } else {
+        println!(
+            "{}, {} out of {} tests succeeded",
+            "ONLY".yellow(),
+            successful_tests,
+            test_count
+        );
     }
 
     Ok(())

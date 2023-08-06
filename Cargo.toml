@@ -22,3 +22,4 @@ qapi = { version = "0.13.0", features = ["qmp"]}
 toml = "0.7.6"
 clap = { version = "4.3.19", features = ["derive"] }
 crossbeam = "0.8.2"
+colored = "2.0.4"
