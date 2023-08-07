@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use clap_num;
 use colored::Colorize;
 use crossbeam::channel::bounded;
 use log::debug;
@@ -21,6 +22,8 @@ struct CliArgs {
     /// Run the listed, individual tests
     #[arg(long, group = "test_mode")]
     tests: Option<Vec<TestName>>,
+    #[arg(short='t',long,value_parser=clap_num::maybe_hex::<u32>)]
+    apic_timer_value: Option<u32>,
 }
 
 fn main() -> Result<()> {
@@ -66,7 +69,13 @@ fn main() -> Result<()> {
 
     let tests: Vec<Box<dyn Test>> = selected_tests
         .iter()
-        .map(|t| t.instantiate(rx.clone(), vm_config.vm_server_address.clone()))
+        .map(|t| {
+            t.instantiate(
+                rx.clone(),
+                vm_config.vm_server_address.clone(),
+                args.apic_timer_value,
+            )
+        })
         .collect::<Result<_>>()
         .context(format!(
             "failed to instantiate at least one of the selected tests {:?}",
@@ -83,15 +92,17 @@ fn main() -> Result<()> {
             test_count,
             t.get_name()
         );
-        match t
-            .run()
-            .context(format!("Test {} {}", t.get_name(), "failed".red()))
-        {
+        match t.run() {
             Ok(_) => {
                 successful_tests += 1;
                 println!("{}", "SUCCESS".green());
             }
-            Err(e) => println!("{} with {}", "FAILED".red(), e),
+            Err(e) => {
+                println!("{}:", "FAILED".red());
+                for x in e.chain() {
+                    println!("\t {}", x)
+                }
+            }
         }
     }
     if successful_tests == test_count {

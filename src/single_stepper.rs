@@ -5,9 +5,9 @@ use std::{
 
 use crate::{
     api::{Event, SevStep},
-    types::kvm_page_track_mode,
+    types::*,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, info};
 
 pub enum StateMachineNextAction {
@@ -187,6 +187,10 @@ impl BuildStepHistogram {
             name: "BuildStepHistogram".to_string(),
         }
     }
+    ///Returns HapMap, that maps encountered step sizes to their occurrence count
+    pub fn get_values(&self) -> &HashMap<u64, u64> {
+        &self.step_histogram
+    }
 }
 
 impl Display for BuildStepHistogram {
@@ -217,23 +221,30 @@ impl EventHandler for BuildStepHistogram {
     }
 }
 
-pub struct StopAfterNStepsHandler {
+pub struct StopAfterNSingleStepsHandler {
     step_counter: usize,
     abort_thresh: usize,
     name: String,
+    expected_rip_values: Option<Vec<u64>>,
 }
 
-impl StopAfterNStepsHandler {
-    pub fn new(n: usize) -> StopAfterNStepsHandler {
-        StopAfterNStepsHandler {
+impl StopAfterNSingleStepsHandler {
+    ///Construct new StopAfterNStepsHandler instance
+    /// # Arguments
+    /// * `n` : Return [`StateMachineNextAction::SHUTDOWN`] in [`Self::process()`] after this many steps events
+    /// * `expected_rip_values` : If set, at each step compare RIP against the given value. Requires VM to run
+    /// in debug mode. May be less than `n`
+    pub fn new(n: usize, expected_rip_values: Option<Vec<u64>>) -> StopAfterNSingleStepsHandler {
+        StopAfterNSingleStepsHandler {
             step_counter: 0,
             abort_thresh: n,
             name: "StopAfterNStepsHandler".to_string(),
+            expected_rip_values,
         }
     }
 }
 
-impl EventHandler for StopAfterNStepsHandler {
+impl EventHandler for StopAfterNSingleStepsHandler {
     fn process(&mut self, event: &Event, _api: &mut SevStep) -> Result<StateMachineNextAction> {
         let event = match event {
             Event::PageFaultEvent(_) => return Ok(StateMachineNextAction::NEXT),
@@ -244,10 +255,34 @@ impl EventHandler for StopAfterNStepsHandler {
             "old step_counter={}, retired_instructions={}, abort_thresh={}",
             &self.step_counter, &event.retired_instructions, &self.abort_thresh
         );
-        self.step_counter += event.retired_instructions as usize;
+
+        if event.retired_instructions == 0 {
+            return Ok(StateMachineNextAction::NEXT);
+        }
+
+        if let Some(exepcted_rip_values) = &self.expected_rip_values {
+            if exepcted_rip_values.len() > self.step_counter {
+                let got_rip = event
+                    .get_register(vmsa_register_name_t::VRN_RIP)
+                    .ok_or(anyhow!(
+                        "failed to get RIP to compare against expected rip values"
+                    ))?;
+                let want_rip = exepcted_rip_values[self.step_counter];
+                if want_rip != got_rip {
+                    bail!(
+                        "at step {}, expected RIP 0x{:x} got 0x{:x}",
+                        self.step_counter + 1,
+                        want_rip,
+                        got_rip,
+                    );
+                }
+            }
+        }
+
+        self.step_counter += 1;
 
         if self.step_counter > self.abort_thresh {
-            debug!("reached abort threshm");
+            debug!("reached abort thresh");
             return Ok(StateMachineNextAction::SHUTDOWN);
         }
 

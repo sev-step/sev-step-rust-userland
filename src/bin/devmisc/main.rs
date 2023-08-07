@@ -5,7 +5,7 @@ use log::debug;
 
 use rust_userland::api::SevStep;
 use rust_userland::single_stepper::{
-    BuildStepHistogram, EventHandler, SkipIfNotOnTargetGPAs, StopAfterNStepsHandler,
+    BuildStepHistogram, EventHandler, SkipIfNotOnTargetGPAs, StopAfterNSingleStepsHandler,
     TargetedStepper,
 };
 use rust_userland::types::kvm_page_track_mode;
@@ -52,7 +52,7 @@ fn main() -> Result<()> {
         timer_value,
     );
     let mut step_histogram = BuildStepHistogram::new();
-    let mut stop_after = StopAfterNStepsHandler::new(100);
+    let mut stop_after = StopAfterNSingleStepsHandler::new(100, None);
     let handler_chain: Vec<&mut dyn EventHandler> =
         vec![&mut targetter, &mut step_histogram, &mut stop_after];
 

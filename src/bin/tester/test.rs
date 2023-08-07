@@ -1,12 +1,15 @@
 use std::{collections::HashSet, fmt::Display, str::FromStr};
 
 use crate::SevStep;
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
 use crossbeam::channel::Receiver;
 use log::debug;
 use rust_userland::{
-    single_stepper::{EventHandler, RetrackGPASet, TargetedStepper},
+    single_stepper::{
+        BuildStepHistogram, EventHandler, RetrackGPASet, SkipIfNotOnTargetGPAs,
+        StopAfterNSingleStepsHandler, TargetedStepper,
+    },
     types::kvm_page_track_mode,
     vmserver_client::{self, *},
 };
@@ -24,6 +27,7 @@ pub enum TestName {
     PageTrackPresent,
     PageTrackWrite,
     PageTrackExec,
+    SingleStepNopSlide,
 }
 
 impl FromStr for TestName {
@@ -35,6 +39,7 @@ impl FromStr for TestName {
             "PageTrackPresent" => Ok(Self::PageTrackPresent),
             "PageTrackWrite" => Ok(Self::PageTrackWrite),
             "PageTrackExec" => Ok(Self::PageTrackExec),
+            "SingleStepNopSlide" => Ok(Self::SingleStepNopSlide),
             _ => Err("invalid TestName value"),
         }
     }
@@ -45,6 +50,7 @@ impl TestName {
         &self,
         abort_chan: Receiver<()>,
         server_addr: String,
+        apic_timer_value: Option<u32>,
     ) -> Result<Box<dyn Test>> {
         match &self {
             TestName::SetupTeardown => Ok(Box::new(SetupTeardownTest::new(abort_chan))),
@@ -63,6 +69,16 @@ impl TestName {
                 kvm_page_track_mode::KVM_PAGE_TRACK_EXEC,
                 server_addr,
             )?)),
+            TestName::SingleStepNopSlide => {
+                let apic_timer_value = apic_timer_value.ok_or(anyhow!(
+                    "SingleStepNopSlide requires apic_timer_value but got None"
+                ))?;
+                Ok(Box::new(SingleStepNopSlideTest::new(
+                    abort_chan,
+                    server_addr,
+                    apic_timer_value,
+                )))
+            }
         }
     }
 }
@@ -74,6 +90,7 @@ impl Display for TestName {
             TestName::PageTrackPresent => write!(f, "PageTrackPresent"),
             TestName::PageTrackWrite => write!(f, "PageTrackWrite"),
             TestName::PageTrackExec => write!(f, "PageTrackExec"),
+            TestName::SingleStepNopSlide => write!(f, "SingleStepNopSlide"),
         }
     }
 }
@@ -99,6 +116,7 @@ impl Into<Vec<TestName>> for TestGroup {
                 TestName::PageTrackWrite,
                 TestName::PageTrackPresent,
                 TestName::PageTrackExec,
+                TestName::SingleStepNopSlide,
             ],
             TestGroup::Basic => vec![TestName::SetupTeardown],
             TestGroup::PageFault => vec![
@@ -106,7 +124,7 @@ impl Into<Vec<TestName>> for TestGroup {
                 TestName::PageTrackPresent,
                 TestName::PageTrackExec,
             ],
-            TestGroup::SingleStepping => vec![],
+            TestGroup::SingleStepping => vec![TestName::SingleStepNopSlide],
         }
     }
 }
@@ -263,5 +281,92 @@ impl Test for CommonPageTrackTest {
         }
 
         Ok(())
+    }
+}
+
+pub struct SingleStepNopSlideTest {
+    abort_chan: Receiver<()>,
+    /// address at which the server inside vm is reachable. format: http://hostname:port
+    server_addr: String,
+    name: TestName,
+    description: String,
+    timer_value: u32,
+}
+
+impl SingleStepNopSlideTest {
+    pub fn new(abort_chan: Receiver<()>, server_addr: String, timer_value: u32) -> Self {
+        SingleStepNopSlideTest {
+            abort_chan,
+            server_addr,
+            name: TestName::SingleStepNopSlide,
+            description: "Use page fault tracking to figure out when NopSlide is executed. Then activate single stepping".to_string(),
+            timer_value,
+        }
+    }
+}
+
+impl Test for SingleStepNopSlideTest {
+    fn get_name(&self) -> String {
+        self.name.to_string()
+    }
+
+    fn get_description(&self) -> &str {
+        &self.description
+    }
+
+    fn run(&self) -> Result<()> {
+        let mut _sev_step = SevStep::new(true, self.abort_chan.clone())?;
+
+        let victim_prog = single_step_victim_init(&self.server_addr, SingleStepTarget::NopSlide)
+            .context("failed to init NopSlide victim")?;
+
+        let mut targetter = SkipIfNotOnTargetGPAs::new(
+            &[victim_prog.gpa],
+            kvm_page_track_mode::KVM_PAGE_TRACK_EXEC,
+            self.timer_value,
+        );
+        let mut step_histogram = BuildStepHistogram::new();
+        let expected_rip_values = victim_prog
+            .expected_offsets
+            .iter()
+            .map(|v| v + victim_prog.vaddr)
+            .collect();
+        let mut stop_after = StopAfterNSingleStepsHandler::new(
+            victim_prog.expected_offsets.len(),
+            Some(expected_rip_values),
+        );
+        let handler_chain: Vec<&mut dyn EventHandler> =
+            vec![&mut targetter, &mut step_histogram, &mut stop_after];
+
+        let server_addr = self.server_addr.clone();
+        let stepper = TargetedStepper::new(
+            _sev_step,
+            handler_chain,
+            kvm_page_track_mode::KVM_PAGE_TRACK_ACCESS,
+            vec![victim_prog.gpa],
+            move || {
+                vmserver_client::single_step_victim_start(&server_addr, SingleStepTarget::NopSlide)
+            },
+        );
+
+        stepper.run()?;
+
+        let step_sizes = step_histogram.get_values();
+
+        if step_sizes.len() == 1 && step_sizes.contains_key(&1) {
+            Ok(())
+        } else if step_sizes.len() == 2
+            && step_sizes.contains_key(&1)
+            && step_sizes.contains_key(&0)
+            && *step_sizes.get(&1).unwrap() >= victim_prog.expected_offsets.len() as u64
+        {
+            Ok(())
+        } else {
+            bail!(
+                "Did not successfully single step target. Require {} single steps and NO multi steps. Step Histogram : {}",
+                victim_prog.expected_offsets.len(),
+                step_histogram
+            )
+        }
     }
 }
