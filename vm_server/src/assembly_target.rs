@@ -75,7 +75,7 @@ impl AssemblyTarget {
                 None,
                 data_buffer_bytes,
                 ProtFlags::PROT_WRITE | ProtFlags::PROT_READ,
-                MapFlags::MAP_ANON | MapFlags::MAP_PRIVATE,
+                MapFlags::MAP_ANON | MapFlags::MAP_PRIVATE | MapFlags::MAP_POPULATE,
                 -1,
                 0,
             )
