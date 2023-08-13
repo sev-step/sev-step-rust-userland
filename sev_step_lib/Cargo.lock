@@ -1129,7 +1129,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust_userland"
+name = "sev_step_lib"
 version = "0.1.0"
 dependencies = [
  "anyhow",

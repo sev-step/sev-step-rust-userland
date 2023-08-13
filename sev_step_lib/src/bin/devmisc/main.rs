@@ -3,14 +3,14 @@ use crossbeam::channel;
 use anyhow::{Context, Ok, Result};
 use log::debug;
 
-use rust_userland::api::SevStep;
-use rust_userland::single_stepper::{
+use sev_step_lib::api::SevStep;
+use sev_step_lib::single_stepper::{
     BuildStepHistogram, EventHandler, SkipIfNotOnTargetGPAs, StopAfterNSingleStepsHandler,
     TargetedStepper,
 };
-use rust_userland::types::kvm_page_track_mode;
-use rust_userland::vm_setup_helpers;
-use rust_userland::vmserver_client::{self, SingleStepTarget};
+use sev_step_lib::types::kvm_page_track_mode;
+use sev_step_lib::vm_setup_helpers;
+use sev_step_lib::vmserver_client::{self, SingleStepTarget};
 
 fn main() -> Result<()> {
     env_logger::init();

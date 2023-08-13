@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use axum::{routing::post, Router};
-use vm_server_v2::handlers::{self, ServerState};
+use vm_server::handlers::{self, ServerState};
 
 #[tokio::main]
 async fn main() {

@@ -1,5 +1,5 @@
 [package]
-name = "rust_userland"
+name = "sev_step_lib"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,16 +11,17 @@ dotenv = "0.15.0"
 
 
 [dependencies]
-anyhow = { version = "1.0.71", features = ["backtrace"]}
+anyhow = { version = "1.0.71", features = ["backtrace"] }
 nix = "0.26.2"
 log = "0.4.17"
 ctrlc = "3.2.5"
-reqwest = { version = "0.11.18", features = ["blocking","json"]}
+reqwest = { version = "0.11.18", features = ["blocking", "json"] }
 serde = { version = "1.0", features = ["derive"] }
 env_logger = "0.10.0"
-qapi = { version = "0.13.0", features = ["qmp"]}  
+qapi = { version = "0.13.0", features = ["qmp"] }
 toml = "0.7.6"
 clap = { version = "4.3.19", features = ["derive"] }
 crossbeam = "0.8.2"
 colored = "2.0.4"
 clap-num = "1.0.2"
+vm_server = { path = "../vm_server" }

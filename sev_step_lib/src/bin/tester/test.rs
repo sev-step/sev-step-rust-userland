@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
 use crossbeam::channel::Receiver;
 use log::debug;
-use rust_userland::{
+use sev_step_lib::{
     single_stepper::{
         BuildStepHistogram, EventHandler, RetrackGPASet, SkipIfNotOnTargetGPAs,
         StopAfterNSingleStepsHandler, TargetedStepper,

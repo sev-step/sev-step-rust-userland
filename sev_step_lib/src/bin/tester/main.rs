@@ -4,7 +4,7 @@ use clap_num;
 use colored::Colorize;
 use crossbeam::channel::bounded;
 use log::debug;
-use rust_userland::{api::SevStep, config, vm_setup_helpers};
+use sev_step_lib::{api::SevStep, config, vm_setup_helpers};
 use test::TestGroup;
 
 use crate::test::{Test, TestName};

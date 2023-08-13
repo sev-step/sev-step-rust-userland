@@ -3,7 +3,7 @@ use std::{mem, num::NonZeroUsize};
 use anyhow::{bail, Context, Result};
 use iced_x86::{code_asm::*, Instruction};
 use nix::sys::mman::{self, MapFlags, ProtFlags};
-use vm_server_v2::req_resp::{InitAssemblyTargetReq, InitAssemblyTargetResp};
+use vm_server::req_resp::{InitAssemblyTargetReq, InitAssemblyTargetResp};
 
 use std::ptr;
 

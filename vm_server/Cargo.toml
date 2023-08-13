@@ -1,5 +1,5 @@
 [package]
-name = "vm_server_v2"
+name = "vm_server"
 version = "0.1.0"
 edition = "2021"
 
