@@ -1,4 +1,4 @@
-/target
+target/
 environment.sh
 wrapper.h
 .vscode/settings.json

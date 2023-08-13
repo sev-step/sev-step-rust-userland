@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 fn main() -> Result<()> {
     // Tell cargo to invalidate the built crate whenever the wrapper changes
-    println!("cargo:rerun-if-changed=environment.sh");
+    println!("cargo:rerun-if-changed=./sev_step_lib/environment.sh");
 
     const ENV_KERNEL_HEADERS: &'static str = "KERNEL_HEADERS";
 

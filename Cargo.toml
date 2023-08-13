@@ -1,26 +1,4 @@
-[package]
-name = "rust_userland"
-version = "0.1.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[build-dependencies]
-bindgen = "0.65.1"
-anyhow = "1.0.71"
-dotenv = "0.15.0"
-
-
-[dependencies]
-anyhow = { version = "1.0.71", features = ["backtrace"]}
-nix = "0.26.2"
-log = "0.4.17"
-ctrlc = "3.2.5"
-reqwest = { version = "0.11.18", features = ["blocking","json"]}
-serde = { version = "1.0", features = ["derive"] }
-env_logger = "0.10.0"
-qapi = { version = "0.13.0", features = ["qmp"]}  
-toml = "0.7.6"
-clap = { version = "4.3.19", features = ["derive"] }
-crossbeam = "0.8.2"
-colored = "2.0.4"
-clap-num = "1.0.2"
+[workspace]
+members = [
+    "sev_step_lib"
+]
