@@ -1,3 +1,11 @@
 vm_cpu_core = 9
 vm_server_address = "http://localhost:8080"
 qemu_qmp_address = "localhost:4444"
+
+#Chose this if you already fixated the frequency by some other means
+fix_cpu_frequency = "External"
+
+#Choose this, to fixate the fix_cpu_frequency using cpufreq
+#[fix_cpu_frequency.Cpufreq]
+#governor = "jfkd"
+#frequency = 12
