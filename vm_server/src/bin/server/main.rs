@@ -22,8 +22,9 @@ async fn main() {
         )
         .with_state(shared_state);
 
-    // run it with hyper on localhost:3000
-    axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
+    let listen_str = "0.0.0.0:8080".to_string();
+    eprintln!("listening on {}", listen_str);
+    axum::Server::bind(&listen_str.parse().unwrap())
         .serve(app.into_make_service())
         .await
         .unwrap();
