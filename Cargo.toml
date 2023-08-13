@@ -1,4 +1,2 @@
 [workspace]
-members = [
-    "sev_step_lib"
-]
+members = ["sev_step_lib", "vm_server"]
