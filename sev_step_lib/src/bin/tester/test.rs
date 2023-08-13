@@ -4,6 +4,7 @@ use crate::SevStep;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
 use crossbeam::channel::Receiver;
+use iced_x86::{code_asm::CodeAssembler, Instruction};
 use log::debug;
 use sev_step_lib::{
     single_stepper::{
@@ -13,6 +14,7 @@ use sev_step_lib::{
     types::kvm_page_track_mode,
     vmserver_client::{self, *},
 };
+use vm_server::req_resp::InitAssemblyTargetReq;
 
 pub trait Test {
     fn get_name(&self) -> String;
@@ -73,11 +75,10 @@ impl TestName {
                 let apic_timer_value = apic_timer_value.ok_or(anyhow!(
                     "SingleStepNopSlide requires apic_timer_value but got None"
                 ))?;
-                Ok(Box::new(SingleStepNopSlideTest::new(
-                    abort_chan,
-                    server_addr,
-                    apic_timer_value,
-                )))
+                Ok(Box::new(
+                    SingleStepNopSlideTest::new(abort_chan, server_addr, apic_timer_value)
+                        .context("failed to instantiate nop slide test")?,
+                ))
             }
         }
     }
@@ -291,17 +292,31 @@ pub struct SingleStepNopSlideTest {
     name: TestName,
     description: String,
     timer_value: u32,
+    nop_slide_req: InitAssemblyTargetReq,
 }
 
 impl SingleStepNopSlideTest {
-    pub fn new(abort_chan: Receiver<()>, server_addr: String, timer_value: u32) -> Self {
-        SingleStepNopSlideTest {
+    pub fn new(abort_chan: Receiver<()>, server_addr: String, timer_value: u32) -> Result<Self> {
+        let mut a = CodeAssembler::new(64)?;
+        for _i in 0..1000 {
+            a.nop()
+                .context(format!("failed to add {}th nop to code", _i))?;
+        }
+        a.ret().context("failed to add final nop to code")?;
+
+        let nop_slide_req = InitAssemblyTargetReq {
+            code: a.take_instructions(),
+            required_mem_bytes: 0,
+        };
+
+        Ok(SingleStepNopSlideTest {
             abort_chan,
             server_addr,
             name: TestName::SingleStepNopSlide,
             description: "Use page fault tracking to figure out when NopSlide is executed. Then activate single stepping".to_string(),
             timer_value,
-        }
+            nop_slide_req,
+        })
     }
 }
 
@@ -317,23 +332,23 @@ impl Test for SingleStepNopSlideTest {
     fn run(&self) -> Result<()> {
         let mut _sev_step = SevStep::new(true, self.abort_chan.clone())?;
 
-        let victim_prog = single_step_victim_init(&self.server_addr, SingleStepTarget::NopSlide)
+        let victim_prog = assembly_target_new(&self.server_addr, &self.nop_slide_req)
             .context("failed to init NopSlide victim")?;
 
         let mut targetter = SkipIfNotOnTargetGPAs::new(
-            &[victim_prog.gpa],
+            &[victim_prog.code_paddr as u64],
             kvm_page_track_mode::KVM_PAGE_TRACK_EXEC,
             self.timer_value,
         );
         let mut step_histogram = BuildStepHistogram::new();
-        let expected_rip_values = victim_prog
-            .expected_offsets
-            .iter()
-            .map(|v| v + victim_prog.vaddr)
-            .collect();
+
+        //first instruction is not part of single stepping as it is consumed as part of the page fault logic
+        let expected_instructions: Vec<&Instruction> =
+            victim_prog.instructions_with_rip.iter().skip(1).collect();
+
         let mut stop_after = StopAfterNSingleStepsHandler::new(
-            victim_prog.expected_offsets.len(),
-            Some(expected_rip_values),
+            expected_instructions.len(),
+            Some(expected_instructions.iter().map(|v| v.ip()).collect()),
         );
         let handler_chain: Vec<&mut dyn EventHandler> =
             vec![&mut targetter, &mut step_histogram, &mut stop_after];
@@ -343,9 +358,10 @@ impl Test for SingleStepNopSlideTest {
             _sev_step,
             handler_chain,
             kvm_page_track_mode::KVM_PAGE_TRACK_ACCESS,
-            vec![victim_prog.gpa],
+            vec![victim_prog.code_paddr as u64],
             move || {
-                vmserver_client::single_step_victim_start(&server_addr, SingleStepTarget::NopSlide)
+                vmserver_client::assembly_target_run(&server_addr)
+                    .context("target trigger assembly_target_run failed")
             },
         );
 
@@ -358,13 +374,13 @@ impl Test for SingleStepNopSlideTest {
         } else if step_sizes.len() == 2
             && step_sizes.contains_key(&1)
             && step_sizes.contains_key(&0)
-            && *step_sizes.get(&1).unwrap() >= victim_prog.expected_offsets.len() as u64
+            && *step_sizes.get(&1).unwrap() >= expected_instructions.len() as u64
         {
             Ok(())
         } else {
             bail!(
                 "Did not successfully single step target. Require {} single steps and NO multi steps. Step Histogram : {}",
-                victim_prog.expected_offsets.len(),
+                expected_instructions.len(),
                 step_histogram
             )
         }

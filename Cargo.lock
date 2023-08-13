@@ -1391,6 +1391,7 @@ dependencies = [
  "ctrlc",
  "dotenv",
  "env_logger",
+ "iced-x86",
  "log",
  "nix",
  "qapi",

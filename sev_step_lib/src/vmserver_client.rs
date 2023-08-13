@@ -1,6 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
-use reqwest::Url;
+use reqwest::{blocking::Client, Url};
+use vm_server::req_resp::{InitAssemblyTargetReq, InitAssemblyTargetResp};
 
 use self::req_resp_ds::*;
 
@@ -84,4 +85,45 @@ pub fn pagetrack_victim_teardown(_basepath: &str) -> Result<()> {
     res.error_for_status()?;
 
     Ok(())
+}
+
+pub fn assembly_target_new(
+    basepath: &str,
+    req: &InitAssemblyTargetReq,
+) -> Result<InitAssemblyTargetResp> {
+    let url = Url::parse(basepath).context(format!("failed to parse {} as url", basepath))?;
+    let url = url.join("/assembly-target/new")?;
+
+    let client = Client::new();
+    let resp = client
+        .post(url.clone())
+        .json(&req)
+        .send()
+        .context(format!("error sending post request to {}", url))?;
+
+    let assembly_target_resp;
+    if !resp.status().is_success() {
+        bail!("server returned error {}", resp.text()?)
+    } else {
+        assembly_target_resp = resp
+            .json::<InitAssemblyTargetResp>()
+            .context("failed to parse server response")?;
+    }
+
+    Ok(assembly_target_resp)
+}
+
+pub fn assembly_target_run(basepath: &str) -> Result<()> {
+    let url = Url::parse(basepath).context(format!("failed to parse {} as url", basepath))?;
+    let url = url.join("/assembly-target/run")?;
+
+    let client = Client::new();
+    let resp = client
+        .post(url.clone())
+        .send()
+        .context(format!("error sending post request to {}", url))?;
+    match resp.status().is_success() {
+        true => Ok(()),
+        false => bail!("server returned error {}", resp.text()?),
+    }
 }
