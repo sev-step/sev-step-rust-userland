@@ -7,6 +7,12 @@ use nix::{
 };
 use std::{arch::asm, ffi::c_void, num::NonZeroUsize};
 
+pub mod page_ping_ponger;
+
+pub trait RunnableTarget {
+    unsafe fn run(&self);
+}
+
 #[derive(Clone)]
 pub struct AssemblyTarget {
     code_buffer: *mut c_void,
@@ -119,8 +125,26 @@ impl AssemblyTarget {
         })
     }
 
+    ///virtual address at which the code is located
+    pub fn get_code_vaddr(&self) -> usize {
+        self.code_buffer as usize
+    }
+
+    ///All instructions with their final, absolute rip value set.
+    /// Sbustract [`get_code_vaddr`], to get the offset inside the code buffer
+    pub fn get_instr_with_rip(&self) -> &Vec<Instruction> {
+        &self.instructions_with_rip
+    }
+
+    ///virtual address of the data buffer
+    pub fn get_data_buffer_vaddr(&self) -> usize {
+        self.data_buffer as usize
+    }
+}
+
+impl RunnableTarget for AssemblyTarget {
     ///Executes the code
-    pub unsafe fn run(&self) {
+    unsafe fn run(&self) {
         unsafe {
             asm!(
                 //save registers for arguments, except, rdi and rax, which are handled by the inout in the asm macro
@@ -156,22 +180,6 @@ impl AssemblyTarget {
             );
         }
     }
-
-    ///virtual address at which the code is located
-    pub fn get_code_vaddr(&self) -> usize {
-        self.code_buffer as usize
-    }
-
-    ///All instructions with their final, absolute rip value set.
-    /// Sbustract [`get_code_vaddr`], to get the offset inside the code buffer
-    pub fn get_instr_with_rip(&self) -> &Vec<Instruction> {
-        &self.instructions_with_rip
-    }
-
-    ///virtual address of the data buffer
-    pub fn get_data_buffer_vaddr(&self) -> usize {
-        self.data_buffer as usize
-    }
 }
 
 impl Drop for AssemblyTarget {
@@ -203,6 +211,7 @@ mod tests {
     use iced_x86::code_asm::*;
 
     use super::AssemblyTarget;
+    use super::RunnableTarget;
     #[test]
     fn catch_caller_preserved_regs() -> Result<()> {
         let mut a = CodeAssembler::new(64)?;

@@ -3,6 +3,26 @@ use std::fmt::Display;
 use iced_x86::Instruction;
 use serde::{Deserialize, Serialize};
 
+use crate::assembly_target::page_ping_ponger::PagePingPongVariant;
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct InitPagePingPongerReq {
+    ///selects the type of access that should be performed
+    pub variant: PagePingPongVariant,
+    ///selects the number of rounds. One round consists of one access to each of the two pages accessed by the ping ponger
+    pub rounds: u32,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct InitPagePingPongerResp {
+    ///virtual addresses of the two pages accessed by the ping ponger
+    pub page_vaddrs: [usize; 2],
+    /// physical addresses for `page_vaddrs`
+    pub page_paddrs: [usize; 2],
+    ///Same as in request. Just for convenience
+    pub variant: PagePingPongVariant,
+}
+
 #[derive(Deserialize, Serialize, Debug)]
 pub struct InitAssemblyTargetReq {
     pub code: Vec<Instruction>,

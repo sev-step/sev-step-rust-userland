@@ -8,7 +8,7 @@ async fn main() {
     env_logger::init();
 
     let shared_state = Arc::new(Mutex::new(ServerState {
-        assembly_target: None,
+        target_programm: None,
     }));
     // build our application with a single route
     let app = Router::new()
@@ -16,9 +16,10 @@ async fn main() {
             "/assembly-target/new",
             post(handlers::init_assembly_target_handler),
         )
+        .route("/run-target", post(handlers::run_target_handler))
         .route(
-            "/assembly-target/run",
-            post(handlers::run_assembly_target_handler),
+            "page-ping-ponger/new",
+            post(handlers::init_page_ping_ponger_handler),
         )
         .with_state(shared_state);
 

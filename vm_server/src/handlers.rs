@@ -1,9 +1,12 @@
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    assembly_target::AssemblyTarget,
-    req_resp::{InitAssemblyTargetReq, InitAssemblyTargetResp},
-    virt_to_phys::{self, VirtToPhysResolver},
+    assembly_target::{page_ping_ponger::PagePingPonger, AssemblyTarget, RunnableTarget},
+    req_resp::{
+        InitAssemblyTargetReq, InitAssemblyTargetResp, InitPagePingPongerReq,
+        InitPagePingPongerResp,
+    },
+    virt_to_phys::{self, LinuxPageMap, VirtToPhysResolver},
 };
 
 use anyhow::{bail, Context};
@@ -41,8 +44,7 @@ where
 }
 #[derive(Clone)]
 pub struct ServerState {
-    //TODO: think about if AssemblyTarget is Sync. If so, we could drop the mutex
-    pub assembly_target: Option<Arc<Mutex<AssemblyTarget>>>,
+    pub target_programm: Option<Arc<Mutex<dyn RunnableTarget + Send>>>,
 }
 
 pub async fn init_assembly_target_handler(
@@ -99,37 +101,91 @@ fn init_assembly_target(
     };
 
     debug!("Storing prog in global state");
-    state.assembly_target = Some(Arc::new(Mutex::new(prog)));
+    state.target_programm = Some(Arc::new(Mutex::new(prog)));
 
     debug!("Sending response {}", resp);
     Ok(resp)
 }
 
-pub async fn run_assembly_target_handler(
+pub async fn run_target_handler(
     State(state): State<Arc<Mutex<ServerState>>>,
 ) -> Result<(), AppError> {
-    match run_assembly_target(state) {
+    match run_target(state) {
         Ok(_) => Ok(()),
         Err(e) => {
-            error!("run_assembly_target failed with {:?}", e);
+            error!("run_target_handler failed with {:?}", e);
             Err(AppError::from(e))
         }
     }
 }
 
-fn run_assembly_target(state: Arc<Mutex<ServerState>>) -> Result<(), anyhow::Error> {
+fn run_target(state: Arc<Mutex<ServerState>>) -> Result<(), anyhow::Error> {
     let state = match state.lock() {
         Ok(v) => v,
         Err(e) => bail!("failed to aquire state lock {}", e),
     };
 
-    match &state.assembly_target {
+    match &state.target_programm {
         Some(prog_mutex) => match prog_mutex.lock() {
             Ok(prog) => unsafe { prog.run() },
             Err(_) => todo!(),
         },
-        None => bail!("assembly target not initialized"),
+        None => bail!("target program not initialized"),
     }
 
     Ok(())
+}
+
+pub async fn init_page_ping_ponger_handler(
+    State(state): State<Arc<Mutex<ServerState>>>,
+    Json(req): Json<InitPagePingPongerReq>,
+) -> Result<Json<InitPagePingPongerResp>, AppError> {
+    match init_page_ping_ponger(state, req) {
+        Ok(v) => Ok(Json(v)),
+        Err(e) => {
+            error!("init_page_ping_ponger failed with {:?}", e);
+            Err(AppError::from(e))
+        }
+    }
+}
+
+pub fn init_page_ping_ponger(
+    state: Arc<Mutex<ServerState>>,
+    req: InitPagePingPongerReq,
+) -> Result<InitPagePingPongerResp, anyhow::Error> {
+    let p = PagePingPonger::new(&req.variant, req.rounds).context(format!(
+        "failed to instantiate {:?} ping ponger with {} rounds",
+        req.variant, req.rounds
+    ))?;
+
+    let mut pagemap = LinuxPageMap::new()?;
+    let page_paddrs = p
+        .get_vaddrs()
+        .iter()
+        .map(|v| {
+            pagemap
+                .get_phys(*v)
+                .context(format!("failed to resolve {} to padddr", *v))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()
+        .context("failed to resolve vaddrs to paddrs")?;
+    let page_paddrs: [usize; 2] = match page_paddrs.len() {
+        2 => [page_paddrs[0], page_paddrs[1]],
+        v => bail!("expected page_paddrs to have length 2 but got {}", v),
+    };
+
+    let resp = InitPagePingPongerResp {
+        page_vaddrs: p.get_vaddrs(),
+        page_paddrs: page_paddrs,
+        variant: req.variant,
+    };
+    debug!("aquiring state lock");
+    let mut state = match state.lock() {
+        Ok(v) => v,
+        Err(e) => bail!("failed to aquire state lock {}", e),
+    };
+
+    state.target_programm = Some(Arc::new(Mutex::new(p)));
+
+    Ok(resp)
 }

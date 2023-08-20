@@ -115,7 +115,7 @@ pub fn assembly_target_new(
 
 pub fn assembly_target_run(basepath: &str) -> Result<()> {
     let url = Url::parse(basepath).context(format!("failed to parse {} as url", basepath))?;
-    let url = url.join("/assembly-target/run")?;
+    let url = url.join("/run-target")?;
 
     let client = Client::new();
     let resp = client

@@ -119,7 +119,7 @@ fn main() -> Result<()> {
     println!("Response to \"new\" request: {}", assembly_target_resp);
 
     client
-        .post("http://localhost:3000/assembly-target/run")
+        .post("http://localhost:3000/run-target")
         .send()
         .context("failed to send \"run\", request")?;
     println!("Done");
