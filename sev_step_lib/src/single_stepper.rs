@@ -19,7 +19,12 @@ pub enum StateMachineNextAction {
     SHUTDOWN,
 }
 pub trait EventHandler {
-    fn process(&mut self, event: &Event, api: &mut SevStep) -> Result<StateMachineNextAction>;
+    fn process(
+        &mut self,
+        event: &Event,
+        api: &mut SevStep,
+        ctx: &mut HashMap<String, Vec<u8>>,
+    ) -> Result<StateMachineNextAction>;
     fn get_name(&self) -> &str;
 }
 
@@ -37,7 +42,8 @@ pub struct RetrackGPASet {
 }
 
 impl RetrackGPASet {
-    /// Constructs a new RetrackGPASet
+    const CK_CURRENT_GPA: &'static str = "RetrackGPASet_Current_GPA";
+
     /// # Arguments
     /// * `gpas` gpas that should be tracked
     /// * `track_mode` selects the used tracking mode
@@ -56,12 +62,38 @@ impl RetrackGPASet {
             max_iterations,
         }
     }
+
+    ///Retrive the GPA of the last pagefault event processed by this handler
+    pub fn get_current_gpa_from_ctx(ctx: &HashMap<String, Vec<u8>>) -> Result<u64> {
+        let serialized_data = match ctx.get(Self::CK_CURRENT_GPA) {
+            Some(v) => v,
+            None => bail!("data not present"),
+        };
+        let deserialized_data: Result<u64, _> = bincode::deserialize(&serialized_data);
+        match deserialized_data {
+            Ok(v) => return Ok(v),
+            Err(e) => bail!(format!("failed to deserialize : {:?}", e)),
+        };
+    }
+
+    fn update_current_gpa_in_ctx(gpa: u64, ctx: &mut HashMap<String, Vec<u8>>) -> Result<()> {
+        let serialized_data = bincode::serialize(&gpa)?;
+        ctx.insert(String::from(Self::CK_CURRENT_GPA), serialized_data);
+        Ok(())
+    }
 }
 
 impl EventHandler for RetrackGPASet {
-    fn process(&mut self, event: &Event, api: &mut SevStep) -> Result<StateMachineNextAction> {
+    fn process(
+        &mut self,
+        event: &Event,
+        api: &mut SevStep,
+        ctx: &mut HashMap<String, Vec<u8>>,
+    ) -> Result<StateMachineNextAction> {
         match &event {
             Event::PageFaultEvent(pf_event) => {
+                Self::update_current_gpa_in_ctx(pf_event.faulted_gpa, ctx)?;
+
                 if let Some(gpa) = self.gpa_for_retrack {
                     if gpa == pf_event.faulted_gpa {
                         bail!("got second fault for gpa 0x{:x}", gpa);
@@ -70,9 +102,11 @@ impl EventHandler for RetrackGPASet {
                         .context(format!("failed to re-track gpa 0x{:x}", gpa))?;
                     self.gpa_for_retrack = None;
                 }
+
                 if self.gpas.contains(&pf_event.faulted_gpa) {
                     self.gpa_for_retrack = Some(pf_event.faulted_gpa);
                 }
+
                 self.iteration_count += 1;
                 if let Some(max_iterations) = self.max_iterations {
                     if self.iteration_count >= max_iterations {
@@ -115,7 +149,12 @@ impl SkipIfNotOnTargetGPAs {
 }
 
 impl EventHandler for SkipIfNotOnTargetGPAs {
-    fn process(&mut self, event: &Event, api: &mut SevStep) -> Result<StateMachineNextAction> {
+    fn process(
+        &mut self,
+        event: &Event,
+        api: &mut SevStep,
+        ctx: &mut HashMap<String, Vec<u8>>,
+    ) -> Result<StateMachineNextAction> {
         let event = match event {
             Event::PageFaultEvent(v) => v,
             Event::StepEvent(_) => return Ok(StateMachineNextAction::NEXT),
@@ -200,7 +239,12 @@ impl Display for BuildStepHistogram {
 }
 
 impl EventHandler for BuildStepHistogram {
-    fn process(&mut self, event: &Event, _api: &mut SevStep) -> Result<StateMachineNextAction> {
+    fn process(
+        &mut self,
+        event: &Event,
+        _api: &mut SevStep,
+        ctx: &mut HashMap<String, Vec<u8>>,
+    ) -> Result<StateMachineNextAction> {
         let event = match event {
             Event::PageFaultEvent(_) => return Ok(StateMachineNextAction::NEXT),
             Event::StepEvent(v) => v,
@@ -229,6 +273,8 @@ pub struct StopAfterNSingleStepsHandler {
 }
 
 impl StopAfterNSingleStepsHandler {
+    const CK_STEPS: &'static str = "CK_StopAfterNSingleStepsHandler_Step_Counter";
+
     ///Construct new StopAfterNStepsHandler instance
     /// # Arguments
     /// * `n` : Return [`StateMachineNextAction::SHUTDOWN`] in [`Self::process()`] after this many steps events
@@ -242,10 +288,36 @@ impl StopAfterNSingleStepsHandler {
             expected_rip_values,
         }
     }
+
+    pub fn get_step_counter_from_ctx(ctx: &HashMap<String, Vec<u8>>) -> Result<usize> {
+        let serialized_data = match ctx.get(Self::CK_STEPS) {
+            Some(v) => v,
+            None => bail!("data not present"),
+        };
+        let deserialized_data: Result<usize, _> = bincode::deserialize(&serialized_data);
+        match deserialized_data {
+            Ok(v) => return Ok(v),
+            Err(e) => bail!(format!("failed to deserialize : {:?}", e)),
+        };
+    }
+
+    fn update_step_counter_in_ctx(
+        step_counter: usize,
+        ctx: &mut HashMap<String, Vec<u8>>,
+    ) -> Result<()> {
+        let serialized_data = bincode::serialize(&step_counter)?;
+        ctx.insert(String::from(Self::CK_STEPS), serialized_data);
+        Ok(())
+    }
 }
 
 impl EventHandler for StopAfterNSingleStepsHandler {
-    fn process(&mut self, event: &Event, _api: &mut SevStep) -> Result<StateMachineNextAction> {
+    fn process(
+        &mut self,
+        event: &Event,
+        _api: &mut SevStep,
+        ctx: &mut HashMap<String, Vec<u8>>,
+    ) -> Result<StateMachineNextAction> {
         let event = match event {
             Event::PageFaultEvent(_) => return Ok(StateMachineNextAction::NEXT),
             Event::StepEvent(v) => v,
@@ -280,6 +352,8 @@ impl EventHandler for StopAfterNSingleStepsHandler {
         }
 
         self.step_counter += 1;
+        Self::update_step_counter_in_ctx(self.step_counter, ctx)
+            .context("update_step_counter_in_ctx failed")?;
 
         if self.step_counter > self.abort_thresh {
             debug!("reached abort thresh");
@@ -336,6 +410,7 @@ where
             debug!("Tracking 0x{:x} with {:?}", x, self.track_mode);
         }
 
+        let mut ctx = HashMap::new();
         info!("entering main event loop");
 
         //for the first event, trigger the target
@@ -347,7 +422,7 @@ where
             debug!("Got Event {:?}", event);
             for handler in &mut self.handler_chain {
                 debug!("Running handler {}", handler.get_name());
-                match handler.process(&event, &mut self.api)? {
+                match handler.process(&event, &mut self.api, &mut ctx)? {
                     StateMachineNextAction::NEXT => {
                         debug!("NEXT");
                     }
