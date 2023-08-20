@@ -18,7 +18,7 @@ async fn main() {
         )
         .route("/run-target", post(handlers::run_target_handler))
         .route(
-            "page-ping-ponger/new",
+            "/page-ping-ponger/new",
             post(handlers::init_page_ping_ponger_handler),
         )
         .with_state(shared_state);

@@ -14,7 +14,7 @@ use sev_step_lib::{
     types::kvm_page_track_mode,
     vmserver_client::{self, *},
 };
-use vm_server::req_resp::InitAssemblyTargetReq;
+use vm_server::req_resp::{InitAssemblyTargetReq, InitPagePingPongerReq};
 
 pub trait Test {
     fn get_name(&self) -> String;
@@ -236,28 +236,26 @@ impl Test for CommonPageTrackTest {
     }
 
     fn run(&self) -> Result<()> {
-        let init_args = PingPongPageTrackReq {
-            access_type: self.track_type.try_into().context(format!(
-                "failed to convert {:?} to AccessType",
-                &self.track_type
-            ))?,
+        let init_args = InitPagePingPongerReq {
+            variant: self.track_type.try_into()?,
+            rounds: 10,
         };
 
-        const REPS: usize = 10;
+        const REPS: u32 = 5;
         for _i in 0..REPS {
             debug!("iteration {}/{}", _i + 1, REPS);
 
             let sev_step = SevStep::new(false, self.abort_chan.clone())
                 .context("failed to open API connection")?;
             debug!("Instantiated API connection");
-            let victim_prog = vmserver_client::pagetrack_victim_init(&self.server_addr, &init_args)
+            let victim_prog = vmserver_client::new_page_ping_ponger(&self.server_addr, &init_args)
                 .context("failed to init pagetrack victim")?;
             debug!("Received PageTrackVictim description : {:?}", victim_prog);
 
             let mut retrack_gpas = RetrackGPASet::new(
-                HashSet::from([victim_prog.gpa1, victim_prog.gpa2]),
+                HashSet::from_iter(victim_prog.page_paddrs.iter().map(|v| *v as u64)),
                 self.track_type,
-                Some(victim_prog.iterations as usize),
+                Some(init_args.rounds as usize),
             );
             let handler_chain: Vec<&mut dyn EventHandler> = vec![&mut retrack_gpas];
 
@@ -266,19 +264,15 @@ impl Test for CommonPageTrackTest {
                 sev_step,
                 handler_chain,
                 self.track_type,
-                vec![victim_prog.gpa1, victim_prog.gpa2],
+                victim_prog.page_paddrs.iter().map(|v| *v as u64).collect(),
                 move || {
                     debug!("requesting page track victim start");
-                    vmserver_client::pagetrack_victim_start(&a)
+                    vmserver_client::run_target_program(&a)
                         .context("failed to start page track victim in trigger fn")
                 },
             );
             debug!("Calling handler.run()");
             handler.run()?;
-
-            debug!("Requesting page track victim teardown");
-            vmserver_client::pagetrack_victim_teardown(&self.server_addr)
-                .context("failed to teardown pagetrack victim")?;
         }
 
         Ok(())
@@ -332,7 +326,7 @@ impl Test for SingleStepNopSlideTest {
     fn run(&self) -> Result<()> {
         let mut _sev_step = SevStep::new(true, self.abort_chan.clone())?;
 
-        let victim_prog = assembly_target_new(&self.server_addr, &self.nop_slide_req)
+        let victim_prog = new_assembly_target(&self.server_addr, &self.nop_slide_req)
             .context("failed to init NopSlide victim")?;
 
         let mut targetter = SkipIfNotOnTargetGPAs::new(
@@ -360,7 +354,7 @@ impl Test for SingleStepNopSlideTest {
             kvm_page_track_mode::KVM_PAGE_TRACK_ACCESS,
             vec![victim_prog.code_paddr as u64],
             move || {
-                vmserver_client::assembly_target_run(&server_addr)
+                vmserver_client::run_target_program(&server_addr)
                     .context("target trigger assembly_target_run failed")
             },
         );

@@ -6,6 +6,9 @@
 
 use std::mem;
 
+use anyhow::bail;
+use vm_server::assembly_target::page_ping_ponger::PagePingPongVariant;
+
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 impl usp_event_type_t {
@@ -14,6 +17,19 @@ impl usp_event_type_t {
         match self {
             usp_event_type_t::PAGE_FAULT_EVENT => mem::size_of::<usp_page_fault_event_t>(),
             usp_event_type_t::SEV_STEP_EVENT => mem::size_of::<sev_step_event_t>(),
+        }
+    }
+}
+
+impl TryInto<PagePingPongVariant> for kvm_page_track_mode {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> Result<PagePingPongVariant, Self::Error> {
+        match self {
+            kvm_page_track_mode::KVM_PAGE_TRACK_WRITE => Ok(PagePingPongVariant::WRITE),
+            kvm_page_track_mode::KVM_PAGE_TRACK_ACCESS => Ok(PagePingPongVariant::READ),
+            kvm_page_track_mode::KVM_PAGE_TRACK_EXEC => Ok(PagePingPongVariant::EXEC),
+            _ => bail!(format!("Cannot convert {:?} to PagePingPongVariant", &self)),
         }
     }
 }

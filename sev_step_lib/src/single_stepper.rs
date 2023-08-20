@@ -315,14 +315,14 @@ where
         api: SevStep<'a>,
         handler_chain: Vec<&'a mut dyn EventHandler>,
         initial_track_mode: kvm_page_track_mode,
-        initially_tracked_gfns: Vec<u64>,
+        initially_tracked_gpas: Vec<u64>,
         target_trigger: F,
     ) -> TargetedStepper<'a, F> {
         TargetedStepper {
             api,
             handler_chain,
             track_mode: initial_track_mode,
-            initially_tracked_gpas: initially_tracked_gfns,
+            initially_tracked_gpas,
             target_trigger,
         }
     }
