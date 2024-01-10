@@ -99,7 +99,7 @@ impl Display for TestName {
 ///Group similar tests together to easily test whole subsystems
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum TestGroup {
-    ///This group contains tests
+    ///This group contains all tests
     All,
     ///This group contains test related to testing the kernel space to user space channel
     Basic,

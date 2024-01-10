@@ -15,13 +15,28 @@ use crate::{
         SEV_STEP_SHARED_MEM_BYTES,
     },
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result as AhwResult};
 use core::slice;
-use crossbeam::channel::{Receiver, TryRecvError};
-use log::error;
-use std::thread;
-use std::{fs::File, os::fd::AsRawFd};
+use crossbeam::channel::{bounded, Receiver, TryRecvError};
+use log::{debug, error, warn};
+use nix::libc::j1939_filter;
+use std::{fs::File, os::fd::AsRawFd, time::Instant};
 use std::{mem, process};
+use std::{thread, time::Duration};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum SevStepError {
+    #[error("failed to execute trigger function : {source}")]
+    TriggerFailed {
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("operation timed out")]
+    Timeout,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
 #[repr(C, align(4096))]
 ///Page aligned array of size `SEV_STEP_SHARED_MEM_BYTES`. This is only
@@ -57,7 +72,7 @@ impl<'a> SevStep<'a> {
     ///Initiate the SevStep API. There may be only one instance open at a time.
     /// # Arguments
     /// - `abort` : The SEV STEP API has some blocking functions. Sending a signal and the `abort` channel will abort these blocking functions with an error
-    pub fn new(decrypt_vmsa: bool, abort: Receiver<()>) -> Result<Self> {
+    pub fn new(decrypt_vmsa: bool, abort: Receiver<()>) -> Result<Self, SevStepError> {
         //alloc buffer
         let mut raw_shared_mem: AlignedSevStepBuf =
             AlignedSevStepBuf([0; SEV_STEP_SHARED_MEM_BYTES as usize]);
@@ -101,7 +116,11 @@ impl<'a> SevStep<'a> {
     /// # Arguments
     /// * `gpa` - Guest Physical address of the page to track. Must be page aligned
     /// * `track_mode` - Tracking mode
-    pub fn track_page(&self, gpa: u64, track_mode: kvm_page_track_mode) -> Result<()> {
+    pub fn track_page(
+        &self,
+        gpa: u64,
+        track_mode: kvm_page_track_mode,
+    ) -> Result<(), SevStepError> {
         let mut p = track_page_param_t {
             gpa,
             track_mode: track_mode as i32,
@@ -116,7 +135,11 @@ impl<'a> SevStep<'a> {
     /// Untrack a single page of the VM that was previously tracked with the given mode
     /// If you already got a page fault event for a page, it is automatically untracked
     /// See [`track_page`](Self::track_page) for parameter description
-    pub fn untrack_page(&self, gpa: u64, track_mode: kvm_page_track_mode) -> Result<()> {
+    pub fn untrack_page(
+        &self,
+        gpa: u64,
+        track_mode: kvm_page_track_mode,
+    ) -> Result<(), SevStepError> {
         let mut p = track_page_param_t {
             gpa,
             track_mode: track_mode as i32,
@@ -130,7 +153,7 @@ impl<'a> SevStep<'a> {
     }
 
     /// Tracks all of the VM's memory pages with the given mode
-    pub fn track_all_pages(&self, track_mode: kvm_page_track_mode) -> Result<()> {
+    pub fn track_all_pages(&self, track_mode: kvm_page_track_mode) -> Result<(), SevStepError> {
         let mut p = track_all_pages_t {
             track_mode: track_mode as i32,
         };
@@ -145,7 +168,7 @@ impl<'a> SevStep<'a> {
 
     /// Untrack all of the VM's memory pages if they where previously tracked with the given
     /// mode
-    pub fn untrack_all_pages(&self, track_mode: kvm_page_track_mode) -> Result<()> {
+    pub fn untrack_all_pages(&self, track_mode: kvm_page_track_mode) -> Result<(), SevStepError> {
         let mut p = track_all_pages_t {
             track_mode: track_mode as i32,
         };
@@ -163,7 +186,7 @@ impl<'a> SevStep<'a> {
         timer_value: u32,
         target_gpa: &mut [u64],
         flush_tlb: bool,
-    ) -> Result<()> {
+    ) -> Result<(), SevStepError> {
         let mut p = sev_step_param_t {
             tmict_value: timer_value,
             gpas_target_pages: target_gpa.as_mut_ptr(),
@@ -179,7 +202,7 @@ impl<'a> SevStep<'a> {
         Ok(())
     }
 
-    pub fn stop_stepping(&self) -> Result<()> {
+    pub fn stop_stepping(&self) -> Result<(), SevStepError> {
         unsafe {
             ioctls::stop_stepping(self.kvm.as_raw_fd()).context("stop stepping ioctls failed")?;
         }
@@ -189,7 +212,7 @@ impl<'a> SevStep<'a> {
     /// Check if there is a new event. The Result only indicates whether we were
     /// able to check for an event. The option inside the result indicates if there was an
     /// event
-    pub fn poll_event(&mut self) -> Result<Option<Event>> {
+    pub fn poll_event(&mut self) -> Result<Option<Event>, SevStepError> {
         unsafe {
             raw_spinlock::lock(&mut self.shared_mem_region.spinlock);
         }
@@ -219,23 +242,48 @@ impl<'a> SevStep<'a> {
         Ok(Some(result))
     }
 
-    pub fn block_untill_event<F>(&mut self, target_trigger: F) -> Result<Event>
+    ///Execute `target_trigger` (in background) and block until we receive an event
+    /// or the optional `timeout` expires.
+    pub fn block_untill_event<F>(
+        &mut self,
+        target_trigger: F,
+        timeout: Option<Duration>,
+    ) -> Result<Event, SevStepError>
     where
-        F: FnOnce() -> Result<()>,
+        F: FnOnce() -> AhwResult<()>,
         F: Send + 'static,
     {
-        thread::spawn(move || {
-            if let Err(e) = target_trigger() {
-                error!("Target trigger failed with {}", e);
-            }
-        });
+        let (s, trigger_result) = bounded(1);
+        thread::spawn(move || s.send(target_trigger()));
 
+        let start_timestamp = Instant::now();
+        let mut trigger_finished = false;
         loop {
+            //check if caller requested abort
             match self.abort.try_recv() {
-                Ok(()) => bail!("received abort signal"),
+                Ok(()) => return Err(SevStepError::Other(anyhow!("received abort signal"))),
                 Err(TryRecvError::Empty) => (),
-                Err(e) => bail!("error checking abort channel : {}", e),
+                Err(e) => {
+                    return Err(SevStepError::Other(anyhow!(
+                        "error checking abort channel : {}",
+                        e
+                    )))
+                }
             }
+
+            //abort if trigger function failed
+            if !trigger_finished {
+                match trigger_result.try_recv() {
+                    Ok(_) => {
+                        debug!("trigger finished successfully");
+                        trigger_finished = true
+                    }
+                    Err(TryRecvError::Empty) => (),
+                    Err(e) => return Err(SevStepError::TriggerFailed { source: e.into() }),
+                }
+            }
+
+            //check for event
             unsafe {
                 raw_spinlock::lock(&mut self.shared_mem_region.spinlock);
             }
@@ -244,6 +292,12 @@ impl<'a> SevStep<'a> {
             }
             unsafe {
                 raw_spinlock::unlock(&mut self.shared_mem_region.spinlock);
+            }
+
+            //abort if optional event timeout passed
+            if timeout.is_some_and(|v| start_timestamp.elapsed() > v) {
+                warn!("block_untill_event_timed out");
+                return Err(SevStepError::Timeout);
             }
         }
 

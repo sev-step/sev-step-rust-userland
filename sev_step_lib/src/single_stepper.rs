@@ -1,10 +1,16 @@
+//!
+//! This file contains abstractions that automate common use cases of the library.
+//! The different abstractions, called `EventHandlers` are similar to HTTP middleware, in the sense
+//! that they can be chained together, to achieve more complex behavior
+//! The [`TargetedStepper`](struct@TargetedStepper) can be used to "execute" a chain of event handlers.
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
+    time::Duration,
 };
 
 use crate::{
-    api::{Event, SevStep},
+    api::{Event, SevStep, SevStepError},
     types::*,
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -63,7 +69,7 @@ impl RetrackGPASet {
         }
     }
 
-    ///Retrive the GPA of the last pagefault event processed by this handler
+    ///Retrieve the GPA of the last pagefault event processed by this handler
     pub fn get_current_gpa_from_ctx(ctx: &HashMap<String, Vec<u8>>) -> Result<u64> {
         let serialized_data = match ctx.get(Self::CK_CURRENT_GPA) {
             Some(v) => v,
@@ -153,7 +159,7 @@ impl EventHandler for SkipIfNotOnTargetGPAs {
         &mut self,
         event: &Event,
         api: &mut SevStep,
-        ctx: &mut HashMap<String, Vec<u8>>,
+        _ctx: &mut HashMap<String, Vec<u8>>,
     ) -> Result<StateMachineNextAction> {
         let event = match event {
             Event::PageFaultEvent(v) => v,
@@ -243,7 +249,7 @@ impl EventHandler for BuildStepHistogram {
         &mut self,
         event: &Event,
         _api: &mut SevStep,
-        ctx: &mut HashMap<String, Vec<u8>>,
+        _ctx: &mut HashMap<String, Vec<u8>>,
     ) -> Result<StateMachineNextAction> {
         let event = match event {
             Event::PageFaultEvent(_) => return Ok(StateMachineNextAction::NEXT),
@@ -265,6 +271,65 @@ impl EventHandler for BuildStepHistogram {
     }
 }
 
+pub struct SimpleCallbackAfterNSingleStepsHandler<T, F>
+where
+    T: Fn(&usize) -> bool,
+    F: FnMut(&mut SevStep, &Event) -> Result<()>,
+{
+    //total step count
+    step_counter: usize,
+    ///maps step counts to the function that should be called at this step count
+    callbacks: Vec<(T, F)>,
+    name: String,
+}
+
+impl<T, F> SimpleCallbackAfterNSingleStepsHandler<T, F>
+where
+    T: Fn(&usize) -> bool,
+    F: FnMut(&mut SevStep, &Event) -> Result<()>,
+{
+    pub fn new(callbacks: Vec<(T, F)>) -> SimpleCallbackAfterNSingleStepsHandler<T, F> {
+        SimpleCallbackAfterNSingleStepsHandler {
+            step_counter: 0,
+            callbacks,
+            name: "SimpleCallbackAfterNSingleStepsHandler".to_string(),
+        }
+    }
+}
+
+impl<T, F> EventHandler for SimpleCallbackAfterNSingleStepsHandler<T, F>
+where
+    T: Fn(&usize) -> bool,
+    F: FnMut(&mut SevStep, &Event) -> Result<()>,
+{
+    fn process(
+        &mut self,
+        event: &Event,
+        api: &mut SevStep,
+        _ctx: &mut HashMap<String, Vec<u8>>,
+    ) -> Result<StateMachineNextAction> {
+        //check and execute callbacks
+        for (idx, (should_exec, callback)) in self.callbacks.iter_mut().enumerate() {
+            let should_exec_result = should_exec(&self.step_counter);
+            debug!(
+                "step_count={}, callback idx={}, should_exec returned {} ",
+                self.step_counter, idx, should_exec_result
+            );
+            if should_exec_result {
+                callback(api, event)
+                    .context(format!("error executing callback with index {idx}",))?;
+            }
+        }
+        self.step_counter += 1;
+
+        Ok(StateMachineNextAction::NEXT)
+    }
+
+    fn get_name(&self) -> &str {
+        &self.name
+    }
+}
+
 pub struct StopAfterNSingleStepsHandler {
     step_counter: usize,
     abort_thresh: usize,
@@ -275,9 +340,9 @@ pub struct StopAfterNSingleStepsHandler {
 impl StopAfterNSingleStepsHandler {
     const CK_STEPS: &'static str = "CK_StopAfterNSingleStepsHandler_Step_Counter";
 
-    ///Construct new StopAfterNStepsHandler instance
+    ///Counts the number of single step events (i.e. only step size 1). Aborts execution after a given amount of steps.
     /// # Arguments
-    /// * `n` : Return [`StateMachineNextAction::SHUTDOWN`] in [`Self::process()`] after this many steps events
+    /// * `n` : Return [`StateMachineNextAction::SHUTDOWN`] in [`Self::process()`] after this many single step events (zero steps are discarded)
     /// * `expected_rip_values` : If set, at each step compare RIP against the given value. Requires VM to run
     /// in debug mode. May be less than `n`
     pub fn new(n: usize, expected_rip_values: Option<Vec<u64>>) -> StopAfterNSingleStepsHandler {
@@ -378,6 +443,7 @@ where
     track_mode: kvm_page_track_mode,
     initially_tracked_gpas: Vec<u64>,
     target_trigger: F,
+    timeout: Option<Duration>,
 }
 
 impl<'a, F> TargetedStepper<'a, F>
@@ -391,6 +457,7 @@ where
         initial_track_mode: kvm_page_track_mode,
         initially_tracked_gpas: Vec<u64>,
         target_trigger: F,
+        timeout: Option<Duration>,
     ) -> TargetedStepper<'a, F> {
         TargetedStepper {
             api,
@@ -398,10 +465,11 @@ where
             track_mode: initial_track_mode,
             initially_tracked_gpas,
             target_trigger,
+            timeout,
         }
     }
 
-    pub fn run(mut self) -> Result<()> {
+    pub fn run(mut self) -> Result<(), SevStepError> {
         debug!("Performing initial tracking");
         for x in self.initially_tracked_gpas {
             self.api
@@ -416,10 +484,9 @@ where
         //for the first event, trigger the target
         let mut event = self
             .api
-            .block_untill_event(self.target_trigger)
-            .context("error waiting for initial event")?;
+            .block_untill_event(self.target_trigger, self.timeout)?;
         loop {
-            debug!("Got Event {:?}", event);
+            debug!("Got Event {:X?}", event);
             for handler in &mut self.handler_chain {
                 debug!("Running handler {}", handler.get_name());
                 match handler.process(&event, &mut self.api, &mut ctx)? {
@@ -442,10 +509,7 @@ where
             self.api.ack_event();
 
             //N.B. that we use an empty/NOP trigger now
-            event = self
-                .api
-                .block_untill_event(|| Ok(()))
-                .context("error waiting for event")?;
+            event = self.api.block_untill_event(|| Ok(()), self.timeout)?;
         }
     }
 }
