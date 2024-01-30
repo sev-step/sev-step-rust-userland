@@ -3,6 +3,7 @@ use std::{collections::HashSet, fmt::Display, str::FromStr};
 use crate::SevStep;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
+use core::time::Duration;
 use crossbeam::channel::Receiver;
 use iced_x86::{code_asm::CodeAssembler, Instruction};
 use log::debug;
@@ -15,7 +16,6 @@ use sev_step_lib::{
     vmserver_client::{self, *},
 };
 use vm_server::req_resp::{InitAssemblyTargetReq, InitPagePingPongerReq};
-
 pub trait Test {
     fn get_name(&self) -> String;
     fn get_description(&self) -> &str;
@@ -182,7 +182,7 @@ impl Test for SetupTeardownTest {
 
     fn run(&self) -> Result<()> {
         for _i in 0..10 {
-            let mut _sev_step = SevStep::new(false, self.abort_chan.clone())
+            let mut _sev_step = SevStep::new(false, self.abort_chan.clone(), false)
                 .context("failed to open API connection")?;
             drop(_sev_step);
         }
@@ -245,7 +245,7 @@ impl Test for CommonPageTrackTest {
         for _i in 0..REPS {
             debug!("iteration {}/{}", _i + 1, REPS);
 
-            let sev_step = SevStep::new(false, self.abort_chan.clone())
+            let sev_step = SevStep::new(false, self.abort_chan.clone(), false)
                 .context("failed to open API connection")?;
             debug!("Instantiated API connection");
             let victim_prog = vmserver_client::new_page_ping_ponger(&self.server_addr, &init_args)
@@ -270,6 +270,7 @@ impl Test for CommonPageTrackTest {
                     vmserver_client::run_target_program(&a)
                         .context("failed to start page track victim in trigger fn")
                 },
+                Some(Duration::from_secs(5)),
             );
             debug!("Calling handler.run()");
             handler.run()?;
@@ -324,7 +325,7 @@ impl Test for SingleStepNopSlideTest {
     }
 
     fn run(&self) -> Result<()> {
-        let mut _sev_step = SevStep::new(true, self.abort_chan.clone())?;
+        let mut _sev_step = SevStep::new(true, self.abort_chan.clone(), false)?;
 
         let victim_prog = new_assembly_target(&self.server_addr, &self.nop_slide_req)
             .context("failed to init NopSlide victim")?;
@@ -357,6 +358,7 @@ impl Test for SingleStepNopSlideTest {
                 vmserver_client::run_target_program(&server_addr)
                     .context("target trigger assembly_target_run failed")
             },
+            Some(Duration::from_secs(50)),
         );
 
         stepper.run()?;

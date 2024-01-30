@@ -1,9 +1,33 @@
-use std::fmt::Display;
+use std::{collections::HashMap, fmt::Display};
 
 use iced_x86::Instruction;
 use serde::{Deserialize, Serialize};
 
 use crate::assembly_target::page_ping_ponger::PagePingPongVariant;
+
+/// The uploaded program must adhere to the following interface on stdin/stdout
+/// After starting the binary via `execute_cmd`, it may do some arbitrary setup. To indicate that it
+/// is done with the setup phase, it must output `VMSERVER::SETUP_DONE` on a single line to stdout.
+/// Afterwards, it must wait for `VMSERVER::START` on stdin before it is allowed to start any payload logic.
+/// To send the start command, the [`run_target`]  API enpoint must be called.
+/// During the setup phase, it may write arbitrary data to stdout. In order to send information (like a memory address)
+/// back to the client it may output lines of the format `VMSERVER::VAR <NAME> <VALUE>`. Both `<NAME>` and `<VALUE`> may not
+/// contain any whitespaces. The tuples (<NAME>,<VALUE>) are send back to the calling client as part of [`InitCustomTargetResp`]
+///
+#[derive(Deserialize, Debug)]
+pub struct InitCustomTargetReq {
+    ///Path to folder containing all files for the custom binary that should get executed
+    pub folder_path: String,
+    ///Command to execute the custom binary, assuming the current working directory is a at `folder_path`. You can
+    /// also supply cli args.
+    pub execute_cmd: String,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct InitCustomTargetResp {
+    ///Key value pairs recorded during the setup phase. See comment on [`InitCustomTargetReq`] for a desription
+    pub setup_output: HashMap<String, String>,
+}
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct InitPagePingPongerReq {

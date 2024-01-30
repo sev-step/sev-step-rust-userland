@@ -5,6 +5,7 @@ use colored::Colorize;
 use crossbeam::channel::bounded;
 use log::debug;
 use sev_step_lib::{api::SevStep, config, vm_setup_helpers};
+use std::process;
 use test::TestGroup;
 
 use crate::test::{Test, TestName};
@@ -48,6 +49,11 @@ fn main() -> Result<()> {
         "Pinned vcpu_thread (tid {}) to core {}",
         vcpu_thread_id, vm_config.vm_cpu_core
     );
+
+    let core_ourself = 15;
+    debug!("Pinning ourself to {}", core_ourself);
+    vm_setup_helpers::pin_pid_to_cpu(process::id() as i64, core_ourself)
+        .context(format!("failed to pin ourself to core {}", core_ourself))?;
 
     //instantiate tests
     let mut selected_tests = Vec::new();

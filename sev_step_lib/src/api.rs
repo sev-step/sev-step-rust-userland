@@ -15,15 +15,15 @@ use crate::{
         SEV_STEP_SHARED_MEM_BYTES,
     },
 };
-use anyhow::{anyhow, bail, Context, Result as AhwResult};
+use anyhow::{anyhow, Context, Result as AhwResult};
 use core::slice;
 use crossbeam::channel::{bounded, Receiver, TryRecvError};
 use log::{debug, error, warn};
-use nix::libc::j1939_filter;
 use std::{fs::File, os::fd::AsRawFd, time::Instant};
 use std::{mem, process};
 use std::{thread, time::Duration};
 use thiserror::Error;
+use SevStepError::MultiStep;
 
 #[derive(Error, Debug)]
 pub enum SevStepError {
@@ -34,6 +34,22 @@ pub enum SevStepError {
     },
     #[error("operation timed out")]
     Timeout,
+    #[error(
+        "page tracking error, gpa=0x{:x}, mode={:?}, message={} : {}",
+        gpa,
+        tracking_mode,
+        message,
+        source
+    )]
+    PageTracking {
+        #[source]
+        source: anyhow::Error,
+        gpa: u64,
+        tracking_mode: kvm_page_track_mode,
+        message: String,
+    },
+    #[error("multi step")]
+    MultiStep { event: SevStepEvent },
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -51,6 +67,8 @@ pub struct SevStep<'a> {
     kvm: File,
     ///if we receive something on this channel, abort any blocking operations
     abort: Receiver<()>,
+    ///If true, Abort with [`MultiStep`] if a multi step is encountered
+    error_on_multi_step: bool,
 }
 
 impl<'a> Drop for SevStep<'a> {
@@ -71,8 +89,15 @@ impl<'a> Drop for SevStep<'a> {
 impl<'a> SevStep<'a> {
     ///Initiate the SevStep API. There may be only one instance open at a time.
     /// # Arguments
+    /// - `decrypt_vmsa` : if true, try to decrypt register state. Requires SEV VM to run in debug mod
     /// - `abort` : The SEV STEP API has some blocking functions. Sending a signal and the `abort` channel will abort these blocking functions with an error
-    pub fn new(decrypt_vmsa: bool, abort: Receiver<()>) -> Result<Self, SevStepError> {
+    /// - `error_on_multi_step` : if true, abort with [`MultiStep`] if a multi step is detected throughout
+    /// the lifetime of this API connection
+    pub fn new(
+        decrypt_vmsa: bool,
+        abort: Receiver<()>,
+        error_on_multi_step: bool,
+    ) -> Result<Self, SevStepError> {
         //alloc buffer
         let mut raw_shared_mem: AlignedSevStepBuf =
             AlignedSevStepBuf([0; SEV_STEP_SHARED_MEM_BYTES as usize]);
@@ -109,6 +134,7 @@ impl<'a> SevStep<'a> {
             shared_mem_region,
             kvm,
             abort,
+            error_on_multi_step,
         })
     }
 
@@ -125,11 +151,15 @@ impl<'a> SevStep<'a> {
             gpa,
             track_mode: track_mode as i32,
         };
-        unsafe {
-            ioctls::track_page(self.kvm.as_raw_fd(), &mut p).context("track page ioctl failed")?;
+        match unsafe { ioctls::track_page(self.kvm.as_raw_fd(), &mut p) } {
+            Ok(_) => Ok(()),
+            Err(e) => Err(SevStepError::PageTracking {
+                source: e.into(),
+                gpa,
+                tracking_mode: track_mode,
+                message: "track_page failed".to_string(),
+            }),
         }
-
-        Ok(())
     }
 
     /// Untrack a single page of the VM that was previously tracked with the given mode
@@ -296,7 +326,7 @@ impl<'a> SevStep<'a> {
 
             //abort if optional event timeout passed
             if timeout.is_some_and(|v| start_timestamp.elapsed() > v) {
-                warn!("block_untill_event_timed out");
+                warn!("block_until_event_timed out");
                 return Err(SevStepError::Timeout);
             }
         }
@@ -310,9 +340,14 @@ impl<'a> SevStep<'a> {
                 result = Event::PageFaultEvent(PageFaultEvent::from_c_struct(e));
             }
             usp_event_type_t::SEV_STEP_EVENT => {
-                result = Event::StepEvent(SevStepEvent::from_raw_event_buffer(
-                    &self.shared_mem_region.event_buffer,
-                ));
+                let step_event =
+                    SevStepEvent::from_raw_event_buffer(&self.shared_mem_region.event_buffer);
+
+                if self.error_on_multi_step && step_event.retired_instructions > 1 {
+                    unsafe { raw_spinlock::unlock(&mut self.shared_mem_region.spinlock) }
+                    return Err(MultiStep { event: step_event });
+                }
+                result = Event::StepEvent(step_event);
             }
         }
 

@@ -1,5 +1,7 @@
-//! Rust wrappers for the SEV STEP IOCTLs in the "linux/kvm.h" header
-//! The behavior of the ioctls is documented in the kernel header.
+//! Rust wrappers for the SEV STEP IOCTLs in the "include/uapi/linux/kvm.h" header of the Linux kernel
+//! The behavior of the IOCTLs is documented in the kernel header.
+//! Likewise, the argument structs are documented in "include/uapi/linux/sev-step/sev-step.h"
+//! See `environment.sh` script to look up the path to the currently used kernel headers
 use crate::types::{sev_step_param_t, track_all_pages_t, track_page_param_t, usp_init_poll_api_t};
 use nix::{self, errno::Errno, libc};
 

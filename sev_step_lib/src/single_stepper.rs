@@ -14,7 +14,7 @@ use crate::{
     types::*,
 };
 use anyhow::{anyhow, bail, Context, Result};
-use log::{debug, info};
+use log::{debug, error, info};
 
 pub enum StateMachineNextAction {
     ///continue with next handler in chain
@@ -23,6 +23,8 @@ pub enum StateMachineNextAction {
     SKIP,
     /// terminate
     SHUTDOWN,
+    /// terminated due to an error, attached string describes reason
+    ErrorShutdown(String),
 }
 pub trait EventHandler {
     fn process(
@@ -503,6 +505,15 @@ where
                         self.api.ack_event();
                         info!("Left main event loop");
                         return Ok(());
+                    }
+                    StateMachineNextAction::ErrorShutdown(message) => {
+                        error!("ERROR_SHUTDOWN with message={}", message);
+                        return Err(anyhow!(
+                            "logic error in handler {} : {}",
+                            handler.get_name(),
+                            message
+                        )
+                        .into());
                     }
                 }
             }

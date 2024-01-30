@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use axum::{routing::post, Router};
+use axum::{extract::DefaultBodyLimit, routing::post, Router};
 use vm_server::handlers::{self, ServerState};
 
 #[tokio::main]
@@ -21,6 +21,12 @@ async fn main() {
             "/page-ping-ponger/new",
             post(handlers::init_page_ping_ponger_handler),
         )
+        .route(
+            "/custom-target/new",
+            post(handlers::init_custom_target_program_handler),
+        )
+        //unit is "bytes"
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .with_state(shared_state);
 
     let listen_str = "0.0.0.0:8080".to_string();

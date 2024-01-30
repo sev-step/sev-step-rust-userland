@@ -1,20 +1,14 @@
 //!This program shows how to use the sev step framework to to exploit secret depending control flow leakge via single stepping
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
-use core::time::Duration;
 use crossbeam::channel::bounded;
 use iced_x86::code_asm::*;
 use log::debug;
 use sev_step_lib::{
-    api::{Event, SevStep, SevStepError},
-    config,
-    single_stepper::{
-        BuildStepHistogram, EventHandler, SimpleCallbackAfterNSingleStepsHandler,
-        SkipIfNotOnTargetGPAs, StopAfterNSingleStepsHandler, TargetedStepper,
-    },
-    vm_setup_helpers,
-    vmserver_client::{self, *},
+    api::SevStep,
+    config, vm_setup_helpers,
+    vmserver_client::{self},
 };
 use vm_server::req_resp::InitAssemblyTargetReq;
 
@@ -84,7 +78,7 @@ fn main() -> Result<()> {
     //After setting up some kind of tracking logic, we can request the execution of our program
     let victim = build_cf_victim(args.guess_for_secret_input)?;
 
-    let victim_program =
+    let _victim_program =
         vmserver_client::new_assembly_target(&vm_config.vm_server_address, &victim).context(
             format!("rquest to create assembly target {:?} failed", victim),
         )?;
@@ -94,75 +88,9 @@ fn main() -> Result<()> {
     let (tx, abort_chan) = bounded(1);
     ctrlc::set_handler(move || tx.send(()).expect("Could not send signal on channel."))
         .expect("Error setting Ctrl-C handler");
-    let sev_step = SevStep::new(false, abort_chan.clone())?;
+    let _sev_step = SevStep::new(false, abort_chan.clone(), false)?;
 
-    /* Now it is time to build the actual attack logic. For this we use SEV-Steps
-     * re-useable event handlers abstractions.
-     * Similar to HTTP middlewares, we can specify functions (or use existing ones
-     * provided by SEV-Step) that are called in a chain for each event.
-     */
-
-    //only single step if we are executing pages belonging to our victim program
-    let mut single_step_target_gpa_only = SkipIfNotOnTargetGPAs::new(
-        &[victim_program.code_paddr as u64],
-        sev_step_lib::types::kvm_page_track_mode::KVM_PAGE_TRACK_EXEC,
-        args.apic_timer_value.unwrap(),
-    );
-
-    //record the size of all encountered steps
-    let mut step_histogram = BuildStepHistogram::new();
-
-    //stop after a certain amount of steps. Here this is just a safeguard to prevent high runtime in case something goes horribly wrong (i.e. zero step loop)
-    let mut stop_stepping = StopAfterNSingleStepsHandler::new(10, None);
-
-    let mut dummy_callback = SimpleCallbackAfterNSingleStepsHandler::new(vec![(
-        |steps: &usize| *steps == 2, //this controls
-        |_: &mut SevStep, e: &Event| {
-            println!("This is an example for a callback function that gets executed after the victim has performed 2 steps {:?}", e);
-            Ok(())
-        },
-    )]);
-
-    let handler_chain: Vec<&mut dyn EventHandler> = vec![
-        &mut single_step_target_gpa_only,
-        &mut step_histogram,
-        &mut stop_stepping,
-        &mut dummy_callback,
-    ];
-
-    //orchestrates the exeuction by
-    // 1) Setting up the initial tracking
-    // 2) Triggering the exeuction of the victim
-    // 3) Handling the generated events with our `handler_chain`
-    let stepper = TargetedStepper::new(
-        sev_step,
-        handler_chain,
-        sev_step_lib::types::kvm_page_track_mode::KVM_PAGE_TRACK_EXEC,
-        vec![victim_program.code_paddr as u64],
-        move || {
-            vmserver_client::run_target_program(&vm_config.vm_server_address)
-                .context("failed to start victim_wrong_guess")
-        },
-        Some(Duration::from_secs(1)),
-    );
-
-    match stepper.run() {
-        Ok(_) => (),
-        Err(SevStepError::Timeout) => {
-            println!("Stepper terminated with timeout error. Target was probably done")
-        }
-        Err(e) => bail!(e),
-    }
-
-    println!("Done! Step histogram: {}", step_histogram);
-    match step_histogram.get_values()[&1] {
-        7 => println!("Victim executed 7 instructions. You guessed the secret correct"),
-        5 => println!("Victim executed 5 instructions. You did not guess the correct secret"),
-        v => bail!(
-            "Victim executed an unexpected number of instructions : {}",
-            v
-        ),
-    }
+    //TODO: attack logic
 
     Ok(())
 }

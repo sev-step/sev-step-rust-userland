@@ -1,6 +1,7 @@
 pub mod api;
 pub mod config;
 pub mod cpufreq;
+pub mod event_handlers;
 mod ioctls;
 mod raw_spinlock;
 pub mod single_stepper;

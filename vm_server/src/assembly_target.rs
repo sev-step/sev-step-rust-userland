@@ -10,7 +10,8 @@ use std::{arch::asm, ffi::c_void, num::NonZeroUsize};
 pub mod page_ping_ponger;
 
 pub trait RunnableTarget {
-    unsafe fn run(&self);
+    unsafe fn run(&mut self) -> Result<()>;
+    unsafe fn stop(self) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -144,7 +145,7 @@ impl AssemblyTarget {
 
 impl RunnableTarget for AssemblyTarget {
     ///Executes the code
-    unsafe fn run(&self) {
+    unsafe fn run(&mut self) -> Result<()> {
         unsafe {
             asm!(
                 //save registers for arguments, except, rdi and rax, which are handled by the inout in the asm macro
@@ -179,6 +180,12 @@ impl RunnableTarget for AssemblyTarget {
                 inout("rdi") self.data_buffer as u64 => _
             );
         }
+
+        Ok(())
+    }
+
+    unsafe fn stop(self) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -221,11 +228,9 @@ mod tests {
         }
         a.ret()?;
 
-        let target = AssemblyTarget::new(a.take_instructions(), 0)?;
+        let mut target = AssemblyTarget::new(a.take_instructions(), 0)?;
 
-        unsafe { target.run() };
-
-        Ok(())
+        unsafe { target.run() }
     }
 
     #[test]
@@ -240,10 +245,8 @@ mod tests {
         }
         a.ret()?;
 
-        let target = AssemblyTarget::new(a.take_instructions(), data_buffer_size)?;
+        let mut target = AssemblyTarget::new(a.take_instructions(), data_buffer_size)?;
 
-        unsafe { target.run() };
-
-        Ok(())
+        unsafe { target.run() }
     }
 }
