@@ -16,7 +16,7 @@ use sev_step_lib::event_handlers::{
 };
 use sev_step_lib::single_stepper::StateMachineNextAction;
 use sev_step_lib::types::kvm_page_track_mode;
-use sev_step_lib::types::kvm_page_track_mode::{KVM_PAGE_TRACK_ACCESS, KVM_PAGE_TRACK_EXEC};
+use sev_step_lib::types::kvm_page_track_mode::{KVM_PAGE_TRACK_EXEC};
 use sev_step_lib::vmserver_client::parse_hex_str;
 use sev_step_lib::{
     api::{Event, SevStep},
@@ -24,20 +24,27 @@ use sev_step_lib::{
     vmserver_client::{self},
 };
 use std::collections::HashMap;
-use std::process;
+
 
 use vm_server::req_resp::InitCustomTargetReq;
 
 pub mod detect_mem_arg_handler;
 
-//TODO: descriptive comment for cli
+/// This program is intended to showcase the design ideas for complex event handling as well as
+/// the VM server's ability to execute custom binaries while still allowing to provide information
+/// about the used GPAs. It is intended to be used with the `simple_pf_victim` from the `victims`
+/// folder. Be sure to build this binary before running this command.
+/// The goal is to detect the location of a memory access performed by `simple_pf_victim`
 #[derive(Parser, Debug)]
 struct CliArgs {
     /// Path to vm config file
-    #[arg(short, long, default_value = "./vm-config.toml")]
+    #[arg(short, long, default_value = "./sev_step_lib/vm-config.toml")]
     vm_config_path: String,
     #[arg(short='t',long,value_parser=clap_num::maybe_hex::<u32>)]
     apic_timer_value: u32,
+    /// Path to the folder containing the simple_pf_victim program
+    #[arg(long, default_value = "./victims/simple_pf_victim")]
+    path_victim_prog: String,
 }
 
 fn main() -> Result<()> {
@@ -50,7 +57,7 @@ fn main() -> Result<()> {
 
     //To properly control the APIC timer, the victim VM must be pinned to a fixed core, that is isolated from the rest of the system. Isolating the core is described in this library's README.
     //In order to pin the VM to a CPU core, we use the QMP interface of QEMU, to look up the PID/TID of the process
-    //that runs the VM's VCPU. Then we pin this process to a fixed core
+    //that runs the VM's vCPU. Then we pin this process to a fixed core
     debug!("main running with debug logging!");
     let vcpu_thread_id = vm_setup_helpers::get_vcpu_thread_id(&vm_config.qemu_qmp_address)
         .context("failed to get VCPU thread id")?;
@@ -65,15 +72,8 @@ fn main() -> Result<()> {
         vcpu_thread_id, vm_config.vm_cpu_core
     );
 
-    //TODO: make configurable
-    let core_ourself = 15;
-    debug!("Pinning ourself to {}", core_ourself);
-    vm_setup_helpers::pin_pid_to_cpu(process::id() as i64, core_ourself)
-        .context(format!("failed to pin ourself to core {}", core_ourself))?;
-
-    //TODO: make configurable
     let external_victim_req = InitCustomTargetReq {
-        folder_path: "/home/luca/sev-step/victims/simple_pf_victim".to_string(),
+        folder_path: args.path_victim_prog,
         execute_cmd: "./a.out".to_string(),
     };
 
@@ -108,11 +108,14 @@ fn main() -> Result<()> {
      * provided by SEV-Step) that are called in a chain for each event.
      */
 
+    //this component will consume all events until we have observed the page fault sequence in
+    // `trigger_pf_sequence`
     let mut trigger_pf_seq = SkipUntilPageFaultSequence::new(
         trigger_pf_sequence.clone(),
         SequenceMatchingStrategy::Scattered,
     );
 
+    //Next this "one off" component, starts single stepping
     let mut start_stepping = ClosureAdapterHandler::new(
         "start stepping",
         |event: &Event, api: &mut SevStep, _ctx: &mut HashMap<String, Vec<u8>>| {
@@ -129,14 +132,15 @@ fn main() -> Result<()> {
         },
     );
 
-    //TODO: resume here: single stepping in isolated test case works fine but if we try to single step with the next
-    //handler we always get zero steps ?!
-    //RIP values seem to be wrong. THey are always the same for all page faults ?!
-
+    //Next, this component consumes all events until 2 single steps have been observed
+    //It expects that single stepping is already enabled
     let mut step_to_mem_access = SkipUntilNSingleSteps::new(2, None);
 
+    //Next, this component configures page fault tracking, to observe all memory writes. Afterward,
+    //it executes the next instruction on stores the GPA of all write page faults
     let mut leak_mem_arg = DetectMemArgHandler::new(args.apic_timer_value);
 
+    //This "one off" component stops single stepping, and marks the end of the attack
     let mut cleanup = ClosureAdapterHandler::new(
         "cleanup",
         |event: &Event, api: &mut SevStep, _ctx: &mut HashMap<String, Vec<u8>>| {
@@ -147,6 +151,8 @@ fn main() -> Result<()> {
             })
         },
     );
+
+    // Combine the individual components and start the attack
 
     let executor = ComposableHandlerChain::new(
         sev_step,
@@ -175,6 +181,9 @@ fn main() -> Result<()> {
         "Detected memory accesses: {:x?}",
         leak_mem_arg.get_observed_faults()
     );
+
+    //Check the result of the attack
+
     let want_addr = parse_hex_str(&victim_program.setup_output["mem_buffer"])?;
     let status_str = if leak_mem_arg
         .get_observed_faults()

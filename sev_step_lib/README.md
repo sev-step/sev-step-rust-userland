@@ -1,63 +1,68 @@
 # SEV-Step Rust User Space
 
 Rust-based user space library for SEV-Step
+Early draft state
+
+For information on setting up your system for SEV-Step, see the [main repo](https://github.com/sev-step/sev-step).
+Follow the steps there to build the Kernel, Qemu and OVMF and set up a VM for use with SEV.
+Next, follow the [*System Setup*](https://github.com/sev-step/sev-step-userland?tab=readme-ov-file#system-setup) section
+in the old SEV-Step library to configure your system for SEV-Step. You can ignore the other sections.
 
 ## Build
 
-- Edit path in `environment.sh` to point to the `usr/include/` subfolder of your kernel sources
+- Edit `KERNEL_HEADERS` in `environment.sh` to point to the `usr/include/` sub folder of the SEV-Step kernel.
+- From the top level directory (i.e. not the `sev_step_lib` subdirectory) execute `cargo build --release --all-targets`
 
-- ```bash
-    source ./environment.sh
-    cargo build
-    ```
+## Run
 
-## Dev Notes
+We expect that you have configured your system for SEV-Step, as described at the start of this README
+This library takes care of pinning your VM to the isolated CPU core as well as setting up the frequency fixation (if needed).
+For this to work, you need to edit the variables in `sev_step_lib/vm-config.toml`.
 
-You need the `refactorUserspaceHeader` kernel branch. Make sure to run `make headers` to refresh the
-header files (especially after coming from another branch)
+All examples require you to run the vm server inside the SEV VM. It must be reachable via the URL specified in
+`vm_server_address` inside `sev_step_lib/vm-config.toml`. The binary of the server should be located at
+`./target/release/server ` after performing  the build step.
 
-### Concept for composeability of functionality
-- Filters: Cannot consume the current event and thus cannot advance the victim's exeuction
-- Subrograms: May consume the current event, advancing the victim's execution. They are required to also return an event, thus ensuring, that the victim is again in a halted state
+The following sections assume that you are in the top level directory, not the `sev_step_lib` subdirectory
 
-=> in program it is probably best to use only one trait for both filters and subprogram with filters simply returning the event that they where called with
+#### Integration Test Suite
+The `tester` binary offers integration tests for the different parts of this framework. Run the command with `--help`
+to get an overview of the available tests.
+To reduce the amount of output, you can drop the `RUST_LOG` part of the command.
 
-How do we communicate between filters and subprograms?
-
-We should support muliple chains. Inside a chain, handlers are executed one after another, according to the StateMachineNextAction logic.
-However given Chain A and Chain B, Chain B is only executed once Chain A has terminated. Afterwards Chain A is no longer executed there is only ever once active chain
-This can be used to group attacks in compartements. We use a context struct to pass information between chains
-
-I.e.
-- Chain 1: State machine to run until a victim function is about to be exeucted. End in a paused state with an event
-- Chain 2: Use 
-
-Instead of multiple chains we could also use Filters/Subprogram that return "skip" untill a certain point is reached
-
-Chains kind of coresspond to a "Targeted Stepper". We could build a variant that returns
-its context as well as any pending event
-
-#### Example for filters + subprogram
-Use page fault sequence to detect a certain function call in a dummy program
-Step the function call a given amount of steps and use page faults to detect the gpa
-of a memory access
-
-compose this as follows
-- Chain 1
-    - StateMachine Subprogram to detect the execution of the targeted function (stock component)
-- Chain 2
-    - Single Step on target Pages Filter (stock component)
-    - SkipUntillNSteps Filter (new). This will advance the execution untill we are at the memory access (stock component)
-    - Subprogram to detect gpa of memory access (custom "one time" component provided by the caller)
-
-### Command Snippets
-
-#### Run single stepping tests on itsepyc3
 ```bash
-RUST_LOG=complex_composition=debug,sev_step_lib=debug sudo -E ./target/release/tester -v ./sev_step_lib/vm-config.toml --tests single-step-nop-slide -t 0x33
+RUST_LOG=sev_step_lib=debug sudo -E ./target/release/tester -v ./sev_step_lib/vm-config.toml <your test selction goes here>
 ```
 
-#### Run complex-composition example on itsepyc3
+#### Run Simple Event Handling + Assembly Snippet Example
+This example shows how to upload and execute an assembly snippet in the VM. The VM server informs the attacker about
+the GPAs of the loaded program to allow easy tracking with SEV-Step (in a debug scenario).
+As an example, we execute a simple assembly snippet with secret dependent branching. Depending on the input supplied via
+the cli, SEV-Step will observe a different number of executed instructions.
+
+It uses the more lightweight event handling ideas, drafted in `sev_step_lib/src/single_stepper.rs`.
+
 ```bash
-RUST_LOG=complex_composition=debug,sev_step_lib=debug sudo -E ./target/release/examples/complex-composition -v ./sev_step_lib/vm-config.toml --apic-timer-value 0x33
+RUST_LOG=targeted_single_stepping=debug,sev_step_lib=debug sudo -E ./target/release/examples/targeted-single-stepping --help
+
 ```
+
+
+#### Run Complex Event Handling + Custom program example
+This example shows how to upload a custom program to the VM and execute it with the VM server.
+It uses the more complex event handling ideas from `sev_step_lib/src/event_handlers.rs`.
+The attacker code uses pre-built components to track the execution state of the victim with 
+page faults + single stepping until it is about to perform a memory access. Than, a custom component is used
+to detect the location of that memory access.
+
+The victim program adheres to a custom protocol for its stdout/stdin output that is documented in
+the `InitCustomTargetReq` struct in `vm_server/src/req_resp.rs`. The basic idea is that the program first starts in a
+"setup phase", where it can perform introspection to locate relevant memory addresses and config values for the attack.
+Next, it outputs these values to its stdout, where they get picked up by the VM server. After the setup phase, the program has to wait for a special marker 
+input on its stdin, before it can begin with the "payload" execution phase. The VM server provides the memory addresses
+and config information back the attacker program.
+
+```bash
+RUST_LOG=complex_composition=debug,sev_step_lib=debug sudo -E ./target/release/examples/complex-composition --help
+```
+

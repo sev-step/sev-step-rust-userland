@@ -1,3 +1,7 @@
+//! THis is an example for implementing the ComposableEventHandler trait for an application specific
+//! event handler that detects all memory accesses belonging to a write instruction executed by
+//! the victim program
+
 use enum_display::EnumDisplay;
 use log::debug;
 use std::collections::HashMap;
@@ -11,7 +15,7 @@ use sev_step_lib::{
 
 #[derive(EnumDisplay)]
 enum DetectMemArgHandlerState {
-    //Victim is halted just before the exeuction of the target instruction
+    //Victim is halted just before the execution of the target instruction
     BeforeTargetInstruction,
     //Targeted instruction is currently executing, gather page faults
     ExecutingTargetInstruction,
@@ -21,8 +25,8 @@ enum DetectMemArgHandlerState {
 
 pub struct DetectMemArgHandler {
     state: DetectMemArgHandlerState,
-    //page faults encountered during the exeuction of the instruction
-    recored_page_faults: Vec<u64>,
+    ///page faults encountered during the execution of the instruction
+    recorded_page_faults: Vec<u64>,
     single_step_time: u32,
 }
 
@@ -32,13 +36,13 @@ impl DetectMemArgHandler {
     pub fn new(apic_timer: u32) -> DetectMemArgHandler {
         DetectMemArgHandler {
             state: DetectMemArgHandlerState::BeforeTargetInstruction,
-            recored_page_faults: Vec::new(),
+            recorded_page_faults: Vec::new(),
             single_step_time: apic_timer,
         }
     }
 
     pub fn get_observed_faults(&self) -> &Vec<u64> {
-        &self.recored_page_faults
+        &self.recorded_page_faults
     }
 }
 
@@ -65,7 +69,7 @@ impl ComposableEventHandler for DetectMemArgHandler {
                     self.state = DetectMemArgHandlerState::ExecutingTargetInstruction;
                 }
                 DetectMemArgHandlerState::ExecutingTargetInstruction => match &event {
-                    Event::PageFaultEvent(v) => self.recored_page_faults.push(v.faulted_gpa),
+                    Event::PageFaultEvent(v) => self.recorded_page_faults.push(v.faulted_gpa),
                     Event::StepEvent(v) => match v.retired_instructions {
                         0 => (),
                         1 => {

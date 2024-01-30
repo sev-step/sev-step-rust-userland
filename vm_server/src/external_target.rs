@@ -3,7 +3,7 @@
 //! See comments on `InitCustomTargetReq` for more details
 
 use crate::assembly_target::RunnableTarget;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use log::debug;
 use nix::sys::signal;
 use nix::sys::signal::kill;
@@ -11,7 +11,7 @@ use nix::unistd::Pid;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
 use std::sync::mpsc::channel;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};

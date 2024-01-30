@@ -78,7 +78,7 @@ impl PagePingPonger {
                 ];
                 (code, page_vaddrs)
             }
-            PagePingPongVariant::EXEC => unsafe {
+            PagePingPongVariant::EXEC => {
                 let mut a =
                     CodeAssembler::new(64).context("failed to instantiate CodeAssembler")?;
 
@@ -103,7 +103,7 @@ impl PagePingPonger {
                 let page_vaddrs = vec![aligned_target_fn1 as usize, aligned_target_fn2 as usize];
 
                 (code, page_vaddrs)
-            },
+            }
         };
 
         Ok(PagePingPonger { code, page_vaddrs })
@@ -157,7 +157,7 @@ mod tests {
         for variant in PagePingPongVariant::iter() {
             let mut p = PagePingPonger::new(&variant, 10)
                 .context(format!("failed to init {} ping ponger", variant))?;
-            unsafe { p.run() };
+            unsafe { p.run().unwrap() };
         }
 
         Ok(())
